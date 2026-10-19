@@ -88,8 +88,8 @@ Each fresh UUID directory contains `report.md`, `result.json`, `trace.jsonl`, an
 verification recommendations, unresolved objections, gaps, and all six roles'
 usage. Failed or resource-exhausted investigations exit nonzero after writing artifacts.
 Input errors print a concise message and create no run. Unknown token counts remain `unknown`; known subtotals remain available in
-JSON. Recommendations never mean a fix was applied. Limits produce partial
-reports; inconclusive is a valid diagnosis. `inspect` only reads local exports.
+JSON. Recommendations never mean a fix was applied. Control-step failures and repaired decisions produce partial reports through
+Reporting when capacity permits. Hard execution limits retain a partial summary; inconclusive is a valid diagnosis. `inspect` only reads local exports.
 SQLite checkpoints retain admission/receipts/acceptance, but public resume and
 crash/replay hardening are deferred to M4. The bounded demo profile and payloads
 are specified in [LLD-03](docs/lld-03-roles.md). This is not a recovery guarantee.

@@ -594,7 +594,9 @@ async def test_likely_cause_requires_supporting_observation(tmp_path, support):
         load_snapshot("dev-00"), UnsupportedCause(followup=False), tmp_path
     )
     result = read_result(directory)
-    assert result["status"] == "failed"
+    assert result["status"] == "completed"
+    assert result["completeness"] == "partial"
+    assert result["state"]["tasks"][result["state"]["report_task"]]["status"] == "succeeded"
     task = next(t for t in result["state"]["tasks"].values() if t["role"] == "reasoning")
     assert task["corrections"] == 1
     assert "supported by an observation" in task["failure"]
@@ -676,3 +678,141 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
     assert "unknown case ID: missing" in error
     assert "Traceback" not in error
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("decision_index", [0, 1])
+async def test_live_demo_2_decisions_are_repaired_into_reports(tmp_path, decision_index):
+    from pathlib import Path
+
+    saved = json.loads(Path("tests/live-demo-2-decisions.json").read_text())
+
+    class ReplayDecision(Scenario):
+        async def complete(self, messages, schema):
+            context = json.loads(messages[1]["content"])
+            if context["role"] == "critic":
+                hypothesis_id = context["results"][context["hypothesis_revision"]]["result"][
+                    "hypotheses"
+                ][0]["hypothesis_id"]
+                self.actions.append(
+                    final(
+                        {
+                            "revision_id": context["hypothesis_revision"],
+                            "summary": "Two open questions",
+                            "objections": [
+                                {
+                                    "objection_id": label,
+                                    "hypothesis_id": hypothesis_id,
+                                    "question": "Causality remains unproven",
+                                    "evidence_ids": [],
+                                    "suggested_role": "observability",
+                                }
+                                for label in ["O1", "O2"]
+                            ],
+                        }
+                    )
+                )
+                return await ScriptedModel.complete(self, messages, schema)
+            if context["role"] == "orchestrator" and context["objections"]:
+                assert context["objection_ids"] == list(context["objections"])
+                text = json.dumps(saved["decisions"][decision_index])
+                for old_id, current_id in zip(
+                    saved["objection_ids"], context["objection_ids"], strict=True
+                ):
+                    text = text.replace(old_id, current_id)
+                # The typo in the first saved UUID intentionally remains unknown.
+                self.actions.append(json.loads(text))
+                return await ScriptedModel.complete(self, messages, schema)
+            return await super().complete(messages, schema)
+
+    directory = await investigate(load_snapshot("dev-00"), ReplayDecision(), tmp_path)
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    assert result["completeness"] == "partial"
+    assert result["state"]["tasks"][result["state"]["report_task"]]["status"] == "succeeded"
+    assert len(result["state"]["dispositions"]) == 2
+    assert all(d["outcome"] == "unresolved" for d in result["state"]["dispositions"].values())
+    assert any(
+        d["reason"] == "not disposed by orchestrator"
+        for d in result["state"]["dispositions"].values()
+    )
+    decisions = [t for t in result["state"]["tasks"].values() if t["role"] == "orchestrator"]
+    assert all(t["status"] == "succeeded" and t["corrections"] == 0 for t in decisions)
+    events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    assert any(e["event"] == "validation" and e["outcome"] == "warning" for e in events)
+    assert not any(e["event"] == "validation" and e["outcome"] == "rejected" for e in events)
+
+
+async def test_duplicate_and_unknown_decision_references_warn_without_correction(tmp_path):
+    class DuplicateDecision(Scenario):
+        async def complete(self, messages, schema):
+            context = json.loads(messages[1]["content"])
+            if context["role"] == "orchestrator" and context["objections"]:
+                key = context["objection_ids"][0]
+                item = {
+                    "objection_id": key,
+                    "outcome": "unresolved",
+                    "reason": "Insufficient evidence",
+                }
+                self.actions.append(
+                    final(
+                        {
+                            "route": "report",
+                            "assignments": [],
+                            "dispositions": [item, item, {**item, "objection_id": "unknown"}],
+                        }
+                    )
+                )
+                return await ScriptedModel.complete(self, messages, schema)
+            return await super().complete(messages, schema)
+
+    directory = await investigate(load_snapshot("dev-00"), DuplicateDecision(), tmp_path)
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    assert len(result["state"]["dispositions"]) == 1
+    assert "unknown" not in result["state"]["dispositions"]
+    events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    warnings = [e for e in events if e["event"] == "validation" and e["outcome"] == "warning"]
+    assert len(warnings) == 2
+
+
+@pytest.mark.parametrize("failed_role", ["orchestrator", "critic", "reasoning", "decide"])
+async def test_exhausted_control_step_still_runs_reporting(tmp_path, failed_role):
+    class FailedControl(Scenario):
+        async def complete(self, messages, schema):
+            context = json.loads(messages[1]["content"])
+            role = context["role"]
+            if role == failed_role or (
+                failed_role == "decide" and role == "orchestrator" and context["objections"]
+            ):
+                self.actions.append(final({"invalid": True}))
+                return await ScriptedModel.complete(self, messages, schema)
+            return await super().complete(messages, schema)
+
+    directory = await investigate(load_snapshot("dev-00"), FailedControl(), tmp_path)
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    assert result["completeness"] == "partial"
+    assert result["state"]["tasks"][result["state"]["report_task"]]["status"] == "succeeded"
+    assert all(d["outcome"] == "unresolved" for d in result["state"]["dispositions"].values())
+    if failed_role in {"orchestrator", "reasoning"}:
+        assert result["report"]["revision_id"] is None
+        assert result["diagnosis"] == "inconclusive"
+    failures = [t for t in result["state"]["tasks"].values() if t["status"] == "failed"]
+    assert len(failures) == 1 and failures[0]["corrections"] == 1
+
+
+async def test_reporting_failure_remains_failed_with_partial_artifacts(tmp_path):
+    class FailedReporting(Scenario):
+        async def complete(self, messages, schema):
+            if json.loads(messages[1]["content"])["role"] == "reporting":
+                self.actions.append(final({"invalid": True}))
+                return await ScriptedModel.complete(self, messages, schema)
+            return await super().complete(messages, schema)
+
+    directory = await investigate(
+        load_snapshot("dev-00"), FailedReporting(followup=False), tmp_path
+    )
+    result = read_result(directory)
+    assert result["status"] == "failed"
+    assert result["completeness"] == "partial"
+    assert "reporting:" in result["stop_reason"]

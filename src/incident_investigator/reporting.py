@@ -37,7 +37,9 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "revision": c["revision"],
         "status": c["status"],
         "stop_reason": c["stop_reason"],
-        "completeness": "complete" if c["status"] == "completed" else "partial",
+        "completeness": "complete"
+        if c["status"] == "completed" and not c["partial"]
+        else "partial",
         "diagnosis": reasoning.get("conclusion", "inconclusive"),
         "hypotheses": reasoning.get("hypotheses", []),
         "report": report,

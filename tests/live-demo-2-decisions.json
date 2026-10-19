@@ -1,0 +1,46 @@
+{
+  "objection_ids": [
+    "092190fc-7432-487f-b5a0-ba4975a8e26f",
+    "b9423548-c2ad-4e08-8b94-413e9ecadedb"
+  ],
+  "decisions": [
+    {
+      "kind": "final",
+      "result": {
+        "assignments": [
+          {
+            "role": "observability",
+            "question": "For objection 092190fc-7432-487f-b5a0-ba4975a8a26f: using the supplied frozen sources, can you confirm when inventory\u2019s database timeout changed and whether inventory requests hit the 50 ms limit during the checkout symptoms window (2026-10-19T11:49:23.080776Z to 2026-10-19T11:49:34.099043Z)?",
+            "objection_id": "092190fc-7432-487f-b5a0-ba4975a8a26f"
+          },
+          {
+            "role": "observability",
+            "question": "For objection b9423548-c2ad-4e08-8b94-413e9ecadedb: using the supplied frozen sources, what checkout, inventory, and database latency, error, load, or trace evidence exists for the window 2026-10-19T11:49:23.080776Z to 2026-10-19T11:49:34.099043Z, including evidence that may point to another cause?",
+            "objection_id": "b9423548-c2ad-4e08-8b94-413e9ecadedb"
+          }
+        ],
+        "route": "gather",
+        "dispositions": []
+      }
+    },
+    {
+      "kind": "final",
+      "result": {
+        "assignments": [],
+        "route": "report",
+        "dispositions": [
+          {
+            "objection_id": "092190fc-7432-487f-b5a0-ba4975a8a26f",
+            "outcome": "unresolved",
+            "reason": "The prior observability attempt could not access the supplied metrics, logs, or history tools. No additional frozen-source evidence is available to establish when the timeout took effect or whether requests hit the 50 ms limit."
+          },
+          {
+            "objection_id": "b9423548-c2ad-4e08-8b94-413e9ecadedb",
+            "outcome": "unresolved",
+            "reason": "Available dependency and history results contain no performance metrics or traces for checkout, inventory, or the database. The observability tool was unavailable, so the supplied evidence cannot determine whether a dependency was degraded or identify another cause."
+          }
+        ]
+      }
+    }
+  ]
+}

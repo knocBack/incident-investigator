@@ -34,7 +34,10 @@ export, not recovery authority. No public resume is claimed in M3.
 Initial plans must include both specialist roles. The whole specialist batch settles
 before Reasoning, including failed/inconclusive tasks. A reasoning task ID identifies
 its revision; Critic must review that exact revision. Every objection receives an
-Orchestrator disposition. Gathering requires a targeted assignment carrying the
+Orchestrator disposition. Runtime repairs structurally valid decisions: unknown or
+duplicate objection references are dropped with validation warnings; omitted
+objections receive an explicit unresolved disposition ("not disposed by orchestrator").
+Inconsistent routes fall back to unresolved reporting. Gathering requires a targeted assignment carrying the
 objection ID; reanalysis consumes a new round and must receive another Critic review.
 An unresolved disposition remains visible at closure. Gathering/reanalysis dispositions
 remain open until a later reviewed decision explicitly leaves them unresolved; they
@@ -47,8 +50,11 @@ These are demo execution bounds, not provider billing guarantees. No task retry.
 Progress means new retrieved observation IDs or a first complete-empty query page; changed prose, failed pages and duplicate evidence do not reset
 no-progress. Update once per reviewed round. At review/no-progress closure, retain
 all open objections explicitly and run Reporting if capacity permits. A hard call,
-task or wall bound produces resource_exhausted with a partial summary; critical-role
-failure produces failed with a partial summary. Neither needs another model call.
+task or wall bound produces resource_exhausted with a partial summary. After bounded
+correction/retries, failed planning, reasoning, decide or Critic steps close the loop
+and run Reporting with partial completeness and unresolved objections if capacity
+permits. Reporting may use a null revision only when no hypothesis was accepted.
+Only Reporting failure or hard execution limits may end without a Reporting result.
 
 Artifacts: `state.sqlite`, `trace.jsonl`, `result.json`, `report.md`, local per UUID
 run directory. JSON retains tasks, receipts, revisions, objections, dispositions,

@@ -103,7 +103,7 @@ class Recommendation(Record):
 
 
 class Report(Record):
-    revision_id: str
+    revision_id: str | None
     summary: str
     facts: list[Finding]
     assumptions: list[str]

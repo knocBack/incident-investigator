@@ -83,6 +83,7 @@ class Control(Record):
     revision: int = 0
     status: Literal["running", "completed", "failed", "resource_exhausted"] = "running"
     stop_reason: str | None = None
+    partial: bool = False
     stage: str = "start"
     tasks: dict[str, Task] = Field(default_factory=dict)
     batch: list[str] = Field(default_factory=list)
@@ -204,6 +205,8 @@ class Investigation:
             "question": question,
             "alert": dict(self.snapshot.alert),
             "hypothesis_revision": control.hypothesis_revision,
+            "report_completeness": "partial" if control.partial else "complete",
+            "stop_reason": control.stop_reason,
             "results": {
                 key: {
                     "role": task.role,
@@ -219,7 +222,11 @@ class Investigation:
             "objections": control.objections,
             "dispositions": control.dispositions,
             **(
-                {"rounds": control.rounds, "max_review_rounds": control.limits.max_review_rounds}
+                {
+                    "rounds": control.rounds,
+                    "max_review_rounds": control.limits.max_review_rounds,
+                    "objection_ids": list(control.objections),
+                }
                 if role == "orchestrator"
                 else {}
             ),
@@ -277,6 +284,75 @@ class Investigation:
             for item in value:
                 self.check_refs(item, allowed)
 
+    def repair_decision(self, c: Control, task: Task, result: dict, call_id: str) -> dict:
+        """Normalize a structurally valid decision without trusting model references."""
+        warnings = []
+        dispositions = {}
+        for item in result["dispositions"]:
+            key = item["objection_id"]
+            if key not in c.objections or key in dispositions:
+                warnings.append(f"dropped unknown or duplicate objection disposition: {key}")
+                continue
+            dispositions[key] = dict(item)
+        for key in c.objections:
+            if key not in dispositions:
+                dispositions[key] = {
+                    "objection_id": key,
+                    "outcome": "unresolved",
+                    "reason": "not disposed by orchestrator",
+                }
+                warnings.append(f"runtime marked objection unresolved: {key}")
+        assignments = []
+        for item in result["assignments"]:
+            key = item["objection_id"]
+            if (
+                result["route"] != "gather"
+                or key not in dispositions
+                or dispositions[key]["outcome"] != "gather"
+            ):
+                warnings.append(f"dropped unrouteable or unknown objection assignment: {key}")
+                continue
+            assignments.append(item)
+        route = result["route"]
+        if route == "gather" and not assignments:
+            route = "report"
+            warnings.append("gathering closed because no actionable assignments remained")
+        for key, item in dispositions.items():
+            routed = (
+                (
+                    item["outcome"] == "gather"
+                    and route == "gather"
+                    and any(a["objection_id"] == key for a in assignments)
+                )
+                or (item["outcome"] == "reanalyze" and route == "reanalyze")
+                or item["outcome"] == "unresolved"
+            )
+            if not routed:
+                dispositions[key] = {
+                    "objection_id": key,
+                    "outcome": "unresolved",
+                    "reason": "no matching follow-up routed by orchestrator",
+                }
+                warnings.append(f"unrouted objection marked unresolved: {key}")
+        for warning in warnings:
+            self.trace(
+                "validation",
+                task_id=task.task_id,
+                attempt_id=task.attempt_id,
+                call_id=call_id,
+                role=task.role,
+                outcome="warning",
+                warning=warning,
+            )
+        if warnings:
+            c.partial = True
+            c.stop_reason = "orchestrator decision repaired; unresolved objections retained"
+        return {
+            "route": route,
+            "assignments": assignments,
+            "dispositions": list(dispositions.values()),
+        }
+
     def validate_result(self, c: Control, task: Task, result: dict) -> None:
         self.check_refs(result, set(task.visible_refs))
         if task.role == "orchestrator":
@@ -289,28 +365,8 @@ class Investigation:
                     or any(a.objection_id for a in plan.assignments)
                 ):
                     raise ValueError("initial plan must gather with both specialist roles")
-            else:
-                ids = [d.objection_id for d in plan.dispositions]
-                if len(set(ids)) != len(ids) or set(ids) != set(c.objections):
-                    raise ValueError("decide must dispose every recorded objection exactly once")
-                for disposition in plan.dispositions:
-                    assigned = any(
-                        a.objection_id == disposition.objection_id for a in plan.assignments
-                    )
-                    if (disposition.outcome == "gather") != assigned:
-                        raise ValueError("gather disposition requires a targeted assignment")
-                    if disposition.outcome == "reanalyze" and plan.route != "reanalyze":
-                        raise ValueError("reanalysis requires reviewed reanalysis route")
-                if any(a.objection_id not in c.objections for a in plan.assignments):
-                    raise ValueError("follow-up must target a known objection")
-                if plan.route == "report" and any(
-                    d.outcome != "unresolved" for d in plan.dispositions
-                ):
-                    raise ValueError(
-                        "report closure must explicitly preserve unresolved objections"
-                    )
-            if (plan.route == "gather") != bool(plan.assignments):
-                raise ValueError("only gathering can carry assignments")
+                if (plan.route == "gather") != bool(plan.assignments):
+                    raise ValueError("only gathering can carry assignments")
         elif task.role == "reasoning":
             if result["conclusion"] == "likely_cause" and (
                 not result["hypotheses"]
@@ -493,6 +549,8 @@ class Investigation:
                 task.requests = data["requests"]
                 task.phase = "tools"
             else:
+                if task.role == "orchestrator" and c.stage == "decide":
+                    data["result"] = self.repair_decision(c, task, data["result"], call.call_id)
                 self.validate_result(c, task, data["result"])
                 # Model IDs are labels only; authoritative identities are runtime allocated.
                 field = {
@@ -535,7 +593,10 @@ class Investigation:
                     f"invalid output: {exc}",
                 )
 
-    def report(self, c: Control) -> None:
+    def report(self, c: Control, partial_reason: str | None = None) -> None:
+        if partial_reason:
+            c.partial = True
+            c.stop_reason = partial_reason
         for key in c.objections:
             if c.dispositions.get(key, {}).get("outcome") != "unresolved":
                 c.dispositions[key] = {
@@ -578,7 +639,11 @@ class Investigation:
         if any(task.status == "running" for task in tasks):
             return
         if c.stage != "gathering" and tasks[0].status != "succeeded":
-            self.close(c, "failed", f"{tasks[0].role}: {tasks[0].failure}")
+            reason = f"{tasks[0].role}: {tasks[0].failure}"
+            if c.stage == "reporting":
+                self.close(c, "failed", reason)
+            else:
+                self.report(c, partial_reason=reason)
             return
         if c.stage in {"plan", "decide"}:
             plan = Plan.model_validate(tasks[0].result)
