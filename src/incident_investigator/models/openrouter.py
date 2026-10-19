@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import random
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -103,6 +104,7 @@ class OpenRouterModel:
                 f"OpenRouter HTTP {status} ({label}): {message}",
                 retryable=status in {408, 429} or status >= 500,
                 status=status,
+                before_response=True,
             )
         if not isinstance(body, dict):
             raise ModelCallError("OpenRouter returned an invalid response envelope", retryable=True)
@@ -197,13 +199,27 @@ class OpenRouterModel:
                         and reasoning.get("mandatory") is False
                     ):
                         request["reasoning"] = {"enabled": False}
-                    return self._response(
-                        await client.post(
+                    for attempt in range(3):
+                        response = await client.post(
                             f"{BASE_URL}/chat/completions",
                             headers={"Authorization": f"Bearer {self._key}"},
                             json=request,
                         )
-                    )
+                        try:
+                            return self._response(response)
+                        except ModelCallError as exc:
+                            if exc.status not in {429} and not (exc.status and exc.status >= 500):
+                                raise
+                            if attempt == 2:
+                                raise
+                            retry_after = response.headers.get("Retry-After")
+                            try:
+                                delay = max(0.0, float(retry_after)) if retry_after else 0.0
+                            except ValueError:
+                                delay = 0.0
+                            await asyncio.sleep(
+                                max(delay, 0.25 * (2**attempt) + random.uniform(0, 0.1))
+                            )
 
                 try:
                     body = await post(structured)
@@ -218,7 +234,9 @@ class OpenRouterModel:
             raise ModelCallError("OpenRouter request timed out", retryable=True) from None
         except httpx.HTTPError as exc:
             raise ModelCallError(
-                f"OpenRouter transport failure: {type(exc).__name__}", retryable=True
+                f"OpenRouter transport failure: {type(exc).__name__}",
+                retryable=True,
+                before_response=True,
             ) from None
         usage = body.get("usage") or {}
         if not isinstance(usage, dict):
@@ -257,4 +275,26 @@ class OpenRouterModel:
             latency_ms=(time.perf_counter() - started) * 1000,
             raw_id=self._redact(str(body["id"])) if body.get("id") else None,
             model=model,
+        )
+
+    async def generation_cost(self, generation_id: str) -> float | None:
+        """Best-effort cost lookup for a completed response without usage."""
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds, transport=self._transport
+            ) as client:
+                response = await client.get(
+                    f"{BASE_URL}/generation",
+                    params={"id": generation_id},
+                    headers={"Authorization": f"Bearer {self._key}"},
+                )
+                body = self._response(response)
+        except (ModelCallError, httpx.HTTPError, TimeoutError):
+            return None
+        data = body.get("data", body)
+        cost = data.get("total_cost", data.get("cost")) if isinstance(data, dict) else None
+        return (
+            cost
+            if isinstance(cost, int | float) and not isinstance(cost, bool) and cost >= 0
+            else None
         )

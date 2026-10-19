@@ -57,6 +57,11 @@ class SpendGuard:
                     self.unknown += self.cap + D(1)
             self.records.append({"reservation": str(bound), "cost": cost})
 
+    async def release(self, ident):
+        async with self.lock:
+            bound = self.active.pop(ident)
+            self.records.append({"reservation": str(bound), "cost": "unbilled_failure"})
+
     def snapshot(self):
         return {
             k: str(v)
@@ -164,8 +169,17 @@ class BoundedModel:
         )
         try:
             result = await self.adapter.complete(messages, schema)
+        except ModelCallError as exc:
+            if exc.before_response or (exc.status is not None and 400 <= exc.status < 600):
+                await self.guard.release(ident)
+            else:
+                await self.guard.finish(ident, None)
+            raise
         except BaseException:
             await self.guard.finish(ident, None)
             raise
-        await self.guard.finish(ident, result.usage.cost if result.usage else None)
+        cost = result.usage.cost if result.usage else None
+        if cost is None and result.raw_id and hasattr(self.adapter, "generation_cost"):
+            cost = await self.adapter.generation_cost(result.raw_id)
+        await self.guard.finish(ident, cost)
         return result

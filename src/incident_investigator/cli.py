@@ -25,6 +25,9 @@ def profile(args) -> Limits:
 
 
 def model(args):
+    injected = getattr(args, "_model_adapter", None)
+    if injected is not None:
+        return injected
     if args.model == "openrouter":
         return OpenRouterModel(timeout_seconds=profile(args).call_seconds)
     if args.model == "codex":
@@ -71,7 +74,10 @@ async def demo(args) -> Path:
                 )
             )
             directory = await investigate(
-                load_snapshot("lab-demo", source_root), model(args), args.out, limits=profile(args)
+                load_snapshot("lab-demo", source_root),
+                getattr(args, "_model_adapter", None) or model(args),
+                args.out,
+                limits=profile(args),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(

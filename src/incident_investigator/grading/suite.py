@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
+import math
 import os
 import time
 from collections import Counter
@@ -21,7 +23,32 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
-def leaderboard(grades, out, skipped=()):
+def _pass_metrics(n, correct, k):
+    k = min(k, n)
+    if not n or not k:
+        return None, None
+    denominator = math.comb(n, k)
+    return 1 - math.comb(n - correct, k) / denominator, math.comb(correct, k) / denominator
+
+
+def _fault_metrics(items, k):
+    metrics = {}
+    for fault in sorted({g["suite_attempt"]["fault"] for g in items}):
+        group = [g for g in items if g["suite_attempt"]["fault"] == fault]
+        correct = sum(g["verdict"] == "correct" for g in group)
+        n = len(group)
+        pass_at_k, pass_to_k = _pass_metrics(n, correct, min(k, n))
+        metrics[fault] = {
+            "n": n,
+            "correct": correct,
+            "pass_at_k": pass_at_k,
+            "pass_to_k": pass_to_k,
+            "k": min(k, n),
+        }
+    return metrics
+
+
+def leaderboard(grades, out, skipped=(), k=4):
     out.mkdir(parents=True, exist_ok=True)
     groups = {}
     for g in grades:
@@ -60,6 +87,7 @@ def leaderboard(grades, out, skipped=()):
                     g["process"]["execution_status"] in {"failed", "resource_exhausted"}
                     for g in items
                 ),
+                "faults": _fault_metrics(items, k),
             }
         )
     data = {
@@ -76,12 +104,12 @@ def leaderboard(grades, out, skipped=()):
         "",
         "No acceptance threshold. Missing measurements remain null. Citation grounding is a provenance proxy; human semantic review remains pending.",
         "",
-        "| Models | Runs | Verdicts | Grounding | Mean USD | Mean tokens in/out | Wall s | Failures |",
-        "| --- | ---: | --- | --- | --- | --- | --- | ---: |",
+        "| Models | Runs | Verdicts | Pass metrics by fault | Grounding | Mean USD | Mean tokens in/out | Wall s | Failures |",
+        "| --- | ---: | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for r in rows:
         lines.append(
-            f"| {json.dumps(r['models'], sort_keys=True)} | {r['runs']} | {r['verdicts']} | {r['mean_grounding']} | {r['mean_cost']} | {r['mean_input_tokens']}/{r['mean_output_tokens']} | {r['mean_wall_seconds']} | {r['execution_failures']} |"
+            f"| {json.dumps(r['models'], sort_keys=True)} | {r['runs']} | {r['verdicts']} | {r['faults']} | {r['mean_grounding']} | {r['mean_cost']} | {r['mean_input_tokens']}/{r['mean_output_tokens']} | {r['mean_wall_seconds']} | {r['execution_failures']} |"
         )
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
@@ -107,7 +135,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     from incident_investigator.models import OpenRouterModel
 
     faults = list(FAMILIES) if args.faults == "all" else args.faults.split(",")
-    if not faults or set(faults) - set(FAMILIES) or args.repeats < 1:
+    repeats = getattr(args, "repeats", None) or 1
+    concurrency = getattr(args, "concurrency", None) or 1
+    if not faults or set(faults) - set(FAMILIES) or repeats < 1 or concurrency < 1:
         raise ValueError("known faults and repeats >= 1 required")
     amount(args.budget_usd)
     max_input_tokens = getattr(args, "max_input_tokens", 64000)
@@ -120,7 +150,8 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
         "exposure": "development lab; exploratory",
         "faults": faults,
         "models": args.models.split(","),
-        "repeats": args.repeats,
+        "repeats": repeats,
+        "concurrency": concurrency,
         "budget_usd": args.budget_usd,
         "max_input_tokens": max_input_tokens,
         "run_order": "model, repeat, fault",
@@ -152,109 +183,88 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
             catalog = {m["id"]: m for m in response.json()["data"]}
             save(out / "prices.json", {m: catalog[m] for m in args.models.split(",")})
         try:
-            for model_id in args.models.split(","):
-                for repeat in range(args.repeats):
-                    for fault in faults:
-                        if guard:
-                            guard.observe(await key_usage(client))
-                            try:
-                                bound = price_bound(
-                                    catalog[model_id], max_input_tokens=max_input_tokens
-                                )
-                            except (KeyError, ValueError) as exc:
-                                reason = str(exc)
-                            else:
-                                if bound > 0 and guard.charged() >= guard.cap:
-                                    save(
-                                        out / "budget-stop.json",
-                                        {
-                                            "model": model_id,
-                                            "fault": fault,
-                                            "repeat": repeat,
-                                            "reason": "suite budget cap already spent",
-                                            **guard.snapshot(),
-                                        },
-                                    )
-                                    return leaderboard(grades, out, batch["skipped"])
-                                reason = (
-                                    None
-                                    if guard.launch_allowed(bound)
-                                    else ("suite budget reservation cannot fit remaining budget")
-                                )
-                            if reason:
-                                skipped = {
-                                    "model": model_id,
-                                    "fault": fault,
-                                    "repeat": repeat,
-                                    "reason": reason,
-                                }
-                                batch["skipped"].append(skipped)
-                                save(out / "batch.json", batch)
-                                save(
-                                    out / "budget-stop.json",
-                                    {
-                                        "model": model_id,
-                                        "fault": fault,
-                                        "repeat": repeat,
-                                        "reason": reason,
-                                        **guard.snapshot(),
-                                    },
-                                )
-                                leaderboard(grades, out, batch["skipped"])
-                                continue
-                        if model_factory:
-                            adapter = model_factory(model_id)
-                        else:
-                            adapter = OpenRouterModel()
-                            # Explicit all-role selection avoids inherited per-role overrides.
-                            adapter._models = dict.fromkeys(adapter._models, model_id)
-                            adapter = BoundedModel(
-                                adapter, catalog, guard, max_input_tokens=max_input_tokens
+            if guard:
+                guard.observe(await key_usage(client))
+            candidates = [
+                (model_id, repeat, fault)
+                for model_id in args.models.split(",")
+                for repeat in range(repeats)
+                for fault in faults
+            ]
+            jobs = []
+            for model_id, repeat, fault in candidates:
+                if guard:
+                    try:
+                        bound = price_bound(catalog[model_id], max_input_tokens=max_input_tokens)
+                        reason = (
+                            None
+                            if guard.launch_allowed(bound)
+                            else "suite budget reservation cannot fit remaining budget"
+                        )
+                    except (KeyError, ValueError) as exc:
+                        reason = str(exc)
+                    if reason:
+                        batch["skipped"].append(
+                            {"model": model_id, "fault": fault, "repeat": repeat, "reason": reason}
+                        )
+                        continue
+                jobs.append((model_id, repeat, fault))
+            save(out / "batch.json", batch)
+            if not jobs and batch["skipped"]:
+                save(out / "budget-stop.json", {**batch["skipped"][0], **guard.snapshot()})
+            semaphore = asyncio.Semaphore(concurrency)
+
+            async def run_job(model_id, repeat, fault):
+                async with semaphore:
+                    if model_factory:
+                        adapter = model_factory(model_id)
+                    else:
+                        adapter = OpenRouterModel()
+                        adapter._models = dict.fromkeys(adapter._models, model_id)
+                        adapter = BoundedModel(
+                            adapter, catalog, guard, max_input_tokens=max_input_tokens
+                        )
+                    started = time.monotonic()
+                    try:
+                        directory = await (demo_fn or cli.demo)(
+                            argparse.Namespace(
+                                model=args.model,
+                                script=None,
+                                out=out,
+                                fault=fault,
+                                _model_adapter=adapter,
                             )
-                        # Inject the adapter through the CLI factory without altering runtime.
-                        original = cli.model
-                        cli.model = lambda args, adapter=adapter: adapter
-                        started = time.monotonic()
-                        try:
-                            directory = await (demo_fn or cli.demo)(
-                                argparse.Namespace(
-                                    model=args.model, script=None, out=out, fault=fault
-                                )
-                            )
-                        except Exception as exc:
-                            directory = out / str(uuid4())
-                            directory.mkdir()
-                            save(
-                                directory / "attempt-error.json",
-                                {
-                                    "exception_type": type(exc).__name__,
-                                    "model": model_id,
-                                    "fault": fault,
-                                    "repeat": repeat,
-                                },
-                            )
-                        finally:
-                            cli.model = original
-                        g = grade_run(directory, expectation(fault))
-                        g["resources"]["wall_seconds"] = time.monotonic() - started
-                        g["suite_attempt"] = {"model": model_id, "repeat": repeat, "fault": fault}
-                        if (directory / "attempt-error.json").exists():
-                            g["process"]["execution_status"] = "failed"
-                        save(directory / "grade.json", g)
-                        grades.append(g)
-                        leaderboard(grades, out, batch["skipped"])
-                        if guard:
-                            guard.observe(await key_usage(client))
-                            save(
-                                out / "budget.json",
-                                {"state": guard.snapshot(), "calls": guard.records},
-                            )
+                        )
+                    except Exception as exc:
+                        directory = out / str(uuid4())
+                        directory.mkdir()
+                        save(
+                            directory / "attempt-error.json",
+                            {
+                                "exception_type": type(exc).__name__,
+                                "model": model_id,
+                                "fault": fault,
+                                "repeat": repeat,
+                            },
+                        )
+                    g = grade_run(directory, expectation(fault))
+                    g["resources"]["wall_seconds"] = time.monotonic() - started
+                    g["suite_attempt"] = {"model": model_id, "repeat": repeat, "fault": fault}
+                    if (directory / "attempt-error.json").exists():
+                        g["process"]["execution_status"] = "failed"
+                    save(directory / "grade.json", g)
+                    return g
+
+            grades.extend(await asyncio.gather(*(run_job(*job) for job in jobs)))
+            if guard:
+                guard.observe(await key_usage(client))
+                save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})
         finally:
             if guard:
                 guard.observe(await key_usage(client))
                 save(out / "spend-after.json", {"usage_delta": str(guard.key_delta)})
                 save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})
-    return leaderboard(grades, out, batch["skipped"])
+    return leaderboard(grades, out, batch["skipped"], getattr(args, "k", 4))
 
 
 def add_commands(sub):
@@ -266,7 +276,14 @@ def add_commands(sub):
     command.add_argument("--faults", default="all")
     command.add_argument("--model", choices=["openrouter", "scripted"], default="openrouter")
     command.add_argument("--models", required=True)
-    command.add_argument("--repeats", type=int, default=1)
+    command.add_argument("--repeats", type=int)
+    command.add_argument("--concurrency", type=int)
+    command.add_argument(
+        "--quick", action="store_true", help="five faults once, with concurrency 5"
+    )
+    command.add_argument(
+        "--k", type=int, default=4, help="pass@k/pass^k reporting cap (default: 4)"
+    )
     command.add_argument("--budget-usd", required=True)
     command.add_argument("--max-input-tokens", type=int, default=64000)
     command.add_argument("--out", type=Path, required=True)
@@ -294,4 +311,12 @@ async def execute(args):
             if args.model == "scripted"
             else None
         )
+        if args.quick:
+            args.repeats = args.repeats or 1
+            args.concurrency = args.concurrency or 5
+        else:
+            args.repeats = args.repeats or 1
+            args.concurrency = args.concurrency or 1
+        if args.k < 1:
+            raise ValueError("k must be positive")
         await run_suite(args, model_factory=factory)

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from incident_investigator.grading.budget import BoundedModel, SpendGuard, price_bound
 from incident_investigator.grading.grader import FAMILIES, expectation, grade, grade_run, matches
-from incident_investigator.grading.suite import run_suite
+from incident_investigator.grading.suite import _pass_metrics, run_suite
 from incident_investigator.lab.app import MemoryTelemetrySink, create_app
 from incident_investigator.models import ModelCallError, ScriptedModel
 
@@ -169,6 +169,80 @@ async def test_shared_budget_reservations_unknown_and_usage():
     free = await guard.reserve(Decimal(0))
     await guard.finish(free, 0)
     assert guard.charged() == Decimal(".09")
+
+
+async def test_guard_reservations_are_atomic_under_concurrency():
+    guard = SpendGuard(0, ".10")
+
+    async def reserve():
+        try:
+            return await guard.reserve(Decimal(".03"))
+        except ModelCallError:
+            return None
+
+    identifiers = await __import__("asyncio").gather(*(reserve() for _ in range(5)))
+    accepted = [ident for ident in identifiers if ident]
+    assert len(accepted) == 3
+    await __import__("asyncio").gather(*(guard.finish(ident, 0) for ident in accepted))
+
+
+async def test_429_releases_bounded_reservation():
+
+    class Adapter:
+        def model_for_role(self, role):
+            return "test/model"
+
+        def build_request(self, *args, **kwargs):
+            return {"messages": [], "max_tokens": 1}
+
+        async def complete(self, *args):
+            raise ModelCallError("rate limited", retryable=True, status=429, before_response=True)
+
+    guard = SpendGuard(0, 1)
+    bounded = BoundedModel(
+        Adapter(),
+        {"test/model": {"context_length": 1, "pricing": {"prompt": 0, "completion": 0}}},
+        guard,
+    )
+    with pytest.raises(ModelCallError):
+        await bounded.complete([], {})
+    assert guard.snapshot()["active"] == "0" and guard.unknown == 0
+
+
+async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path):
+    import asyncio
+    import json
+
+    started = asyncio.Event()
+    active = 0
+
+    async def demo(args):
+        nonlocal active
+        active += 1
+        if active == 5:
+            started.set()
+        await asyncio.wait_for(started.wait(), 1)
+        directory = args.out / str(__import__("uuid").uuid4())
+        directory.mkdir()
+        (directory / "result.json").write_text(json.dumps(result()))
+        return directory
+
+    args = Namespace(
+        faults="all",
+        models="scripted",
+        model="scripted",
+        repeats=1,
+        concurrency=5,
+        budget_usd="0",
+        out=tmp_path / "batch",
+    )
+    board = await run_suite(args, demo_fn=demo, model_factory=lambda _: ScriptedModel())
+    assert len(board["runs"]) == 5
+    assert len(list(args.out.glob("*/grade.json"))) == 5
+
+
+def test_pass_metrics_are_unbiased_estimators():
+    assert _pass_metrics(4, 2, 2) == (5 / 6, 1 / 6)
 
 
 def test_price_bound_and_unpriced_fee():
