@@ -63,6 +63,9 @@ def test_dev_fixture_validates_and_digest_ignores_line_order() -> None:
     assert dataset_digest(alert, list(reversed(rows)), fault_plan) == dataset_digest(
         alert, rows, fault_plan
     )
+    assert alert["affected_service"] == "checkout"
+    assert len([row for row in rows if row.source == "history"]) == 3
+    assert len({row.event_time for row in rows if row.source == "metrics"}) == 10
 
 
 def test_runtime_package_does_not_import_evaluator_files() -> None:

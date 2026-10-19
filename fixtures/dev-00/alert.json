@@ -1,7 +1,12 @@
 {
-  "affected_service": "inventory",
+  "affected_service": "checkout",
   "case_id": "dev-00",
-  "cutoff": "2026-01-01T00:00:00+00:00",
-  "observed_symptoms": ["checkout timeouts", "inventory errors"],
-  "time_window": {"end": "2026-01-01T00:00:00+00:00", "start": "2025-12-31T23:59:50+00:00"}
+  "cutoff": "2026-01-01T00:10:00+00:00",
+  "observed_symptoms": [
+    "checkout latency and error rate up"
+  ],
+  "time_window": {
+    "end": "2026-01-01T00:10:00+00:00",
+    "start": "2026-01-01T00:04:00+00:00"
+  }
 }

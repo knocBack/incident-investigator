@@ -2,7 +2,7 @@
   "cases": {
     "dev-00": {
       "alert": "alert.json",
-      "dataset_digest": "d9eeae67f6d9ff5e1f25cfd81e915b75460a9ab9e1c9f273b67d0f70bd462e51",
+      "dataset_digest": "d8d1cfa89558d5b47956359979534aaeb76709452faaaa0677cee77c22838a41",
       "fault_plan": "fault-plan.json",
       "observations": "observations.jsonl"
     }
