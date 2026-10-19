@@ -8,7 +8,7 @@ from incident_investigator import cli
 from incident_investigator.runtime import investigate
 
 
-@pytest.fixture(params=["current", "explicit"])
+@pytest.fixture(params=["hub", "staged"])
 def runtime_graph(request, monkeypatch):
     run = partial(investigate, graph=request.param)
     monkeypatch.setattr(request.module, "investigate", run, raising=False)

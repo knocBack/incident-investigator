@@ -17,6 +17,7 @@ import httpx
 
 from incident_investigator.grading.budget import BoundedModel, SpendGuard, amount, price_bound
 from incident_investigator.grading.grader import FAMILIES, expectation, grade_run, measured_sum
+from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument, recorded_graph
 
 
 def save(path, value):
@@ -57,7 +58,7 @@ def leaderboard(grades, out, skipped=(), k=4):
     groups = {}
     for g in grades:
         models = g.get("models", {})
-        name = (g.get("graph", "current"), json.dumps(models, sort_keys=True))
+        name = (recorded_graph(g.get("graph")), json.dumps(models, sort_keys=True))
         groups.setdefault(name, []).append(g)
     rows = []
     for (graph, name), items in groups.items():
@@ -152,7 +153,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     out.mkdir(parents=True, exist_ok=False)
     batch = {
         "version": "suite.v1",
-        "graph": getattr(args, "graph", "current"),
+        "graph": getattr(args, "graph", DEFAULT_GRAPH),
         "exposure": "development lab; exploratory",
         "faults": faults,
         "models": args.models.split(","),
@@ -281,7 +282,7 @@ def add_commands(sub):
     command.add_argument("--fault", choices=FAMILIES)
     command.add_argument("--out", type=Path)
     command = sub.add_parser("eval-suite")
-    command.add_argument("--graph", choices=["current", "explicit"], default="current")
+    add_graph_argument(command)
     command.add_argument("--faults", default="all")
     command.add_argument("--model", choices=["openrouter", "scripted"], default="openrouter")
     command.add_argument("--models", required=True)

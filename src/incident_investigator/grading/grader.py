@@ -8,6 +8,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from incident_investigator.graph_config import recorded_graph
+
 VERSION = "grader.v1"
 EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
 FAMILIES = tuple(sorted(p.stem for p in (EXPECTED / "faults").glob("*.json")))
@@ -167,7 +169,7 @@ def grade(result, expected, events=()):
         "expectation_version": expected["version"],
         "family": expected["family"],
         "run_id": result.get("run_id"),
-        "graph": result.get("graph", "current"),
+        "graph": recorded_graph(result.get("graph")),
         "verdict": verdict,
         "diagnosis_checks": {
             "culprit_service": service,

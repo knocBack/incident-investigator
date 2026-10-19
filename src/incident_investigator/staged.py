@@ -1,4 +1,4 @@
-"""Explicit stage edges with checkpointed, stage-local model/tool loops.
+"""Staged workflow edges with checkpointed, stage-local model/tool loops.
 
 Gathering shares one admission/commit loop across its two parallel specialists.
 This preserves global budgets, cross-task dedupe and authoritative provenance;
@@ -69,7 +69,7 @@ def _stage(
     return graph.compile()
 
 
-def build_graph(runner: Investigation) -> StateGraph:
+def build_staged_graph(runner: Investigation) -> StateGraph:
     """Workflow decisions are graph edges; no controller or advance() is used."""
     graph = StateGraph(GraphState)
 

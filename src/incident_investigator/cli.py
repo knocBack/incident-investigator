@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 from incident_investigator.contracts import PROFILES, Limits
+from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument
 from incident_investigator.lab.__main__ import snapshot
 from incident_investigator.lab.app import JsonlTelemetrySink, create_app
 from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
@@ -78,7 +79,7 @@ async def demo(args) -> Path:
                 getattr(args, "_model_adapter", None) or model(args),
                 args.out,
                 limits=profile(args),
-                graph=getattr(args, "graph", "current"),
+                graph=getattr(args, "graph", DEFAULT_GRAPH),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -102,7 +103,7 @@ async def run(args) -> int:
                     args.out,
                     semaphore=semaphore,
                     limits=profile(args),
-                    graph=args.graph,
+                    graph=getattr(args, "graph", DEFAULT_GRAPH),
                 )
                 for case in snapshots
             ]
@@ -122,7 +123,7 @@ def main() -> None:
     inspect.add_argument("run_dir", type=Path)
     for name in ("investigate", "demo"):
         command = sub.add_parser(name)
-        command.add_argument("--graph", choices=["current", "explicit"], default="current")
+        add_graph_argument(command)
         command.add_argument(
             "--model", choices=["scripted", "codex", "openrouter"], default="scripted"
         )

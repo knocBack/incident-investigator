@@ -1,4 +1,4 @@
-"""Bounded six-role graph: serialized ownership, parallel single-call workers."""
+"""Shared bounded investigation runtime; the staged workflow is the default."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from typing import Annotated, Any, Literal, TypedDict
 from uuid import uuid4
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from incident_investigator.contracts import (
@@ -26,6 +24,7 @@ from incident_investigator.contracts import (
     Role,
     action_type,
 )
+from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
 from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
 from incident_investigator.repair import (
     Repairs,
@@ -91,7 +90,7 @@ class Control(Record):
     run_id: str
     case_id: str
     limits: Limits
-    graph: Literal["current", "explicit"] = "current"
+    graph: GraphVariant = DEFAULT_GRAPH
     revision: int = 0
     status: Literal["running", "completed", "failed", "resource_exhausted"] = "running"
     stop_reason: str | None = None
@@ -198,8 +197,10 @@ class Investigation:
         semaphore: asyncio.Semaphore,
         *,
         faults: dict[str, FaultSelection] | None = None,
-        graph: Literal["current", "explicit"] = "current",
+        graph: GraphVariant = DEFAULT_GRAPH,
     ) -> None:
+        if graph not in {"staged", "hub"}:
+            raise ValueError(f"unknown graph: {graph}")
         self.snapshot, self.model, self.out, self.limits = snapshot, model, out, limits
         self.semaphore = semaphore
         self.registry = build_registry(snapshot)
@@ -664,38 +665,6 @@ class Investigation:
             )
         ]
 
-    def advance(self, c: Control) -> None:
-        tasks = [c.tasks[key] for key in c.batch]
-        if any(task.status == "running" for task in tasks):
-            return
-        if c.stage != "gathering" and tasks[0].status != "succeeded":
-            reason = f"{tasks[0].role}: {tasks[0].failure}"
-            if c.stage == "reporting":
-                self.close(c, "failed", reason)
-            else:
-                self.report(c, partial_reason=reason)
-            return
-        if c.stage in {"plan", "decide"}:
-            plan = Plan.model_validate(tasks[0].result)
-            for disposition in plan.dispositions:
-                c.dispositions[disposition.objection_id] = disposition.model_dump()
-            if plan.route == "report" or c.no_progress >= c.limits.max_no_progress_rounds:
-                self.report(c)
-            else:
-                self.round(c, plan)
-        elif c.stage == "gathering":
-            self.reason(c)
-        elif c.stage == "reasoning":
-            self.review(c)
-        elif c.stage == "critic":
-            self.accept_review(c)
-            if c.objections:
-                self.decide(c)
-            else:
-                self.report(c)
-        elif c.stage == "reporting":
-            c.status = "completed"
-
     def plan(self, c: Control) -> None:
         c.stage = "plan"
         c.batch = [
@@ -827,22 +796,6 @@ class Investigation:
         )
         return {"control": c.model_dump(mode="json")}
 
-    async def controller(self, state: GraphState) -> dict:
-        c = self.receive(state)
-        # A task can settle at admission (allowance spent) with nothing dispatched; advance
-        # again so the graph never stops while running. Each pass settles or dispatches work.
-        for _ in range(8):
-            if c.status != "running":
-                break
-            if c.stage == "start":
-                self.plan(c)
-            else:
-                self.advance(c)
-            self.schedule(c)
-            if c.dispatch:
-                break
-        return self.checkpoint(c)
-
     async def execute(self, state: dict) -> dict:
         call = Call.model_validate(state["call"])
         started = time.monotonic()
@@ -917,35 +870,14 @@ class Investigation:
         return {"inbox": {call.call_id: receipt}}
 
     def graph(self):
-        if self.variant == "explicit":
-            from incident_investigator.explicit import build_graph
+        """Build the staged workflow by default; hub is a deprecated opt-in."""
+        if self.variant == "hub":
+            from incident_investigator.hub import build_hub_graph
 
-            return build_graph(self)
-        graph = StateGraph(GraphState)
-        graph.add_node("controller", self.controller)
-        for role in PAYLOADS:
-            graph.add_node(role, self.execute)
-            graph.add_edge(role, "controller")
-        graph.add_node("tool", self.execute)
-        graph.add_edge("tool", "controller")
-        graph.add_edge(START, "controller")
+            return build_hub_graph(self)
+        from incident_investigator.staged import build_staged_graph
 
-        def route(state):
-            c = state["control"]
-            if c["status"] != "running":
-                return END
-            return [
-                Send(
-                    c["calls"][key]["role"] if c["calls"][key]["kind"] == "model" else "tool",
-                    {"call": c["calls"][key]},
-                )
-                for key in c["dispatch"]
-            ]
-
-        # Send destinations need explicit metadata for draw_mermaid()/Studio.
-        # This does not change dispatch or the current graph's execution order.
-        graph.add_conditional_edges("controller", route, [*PAYLOADS, "tool", END])
-        return graph
+        return build_staged_graph(self)
 
 
 async def investigate(
@@ -956,12 +888,12 @@ async def investigate(
     limits: Limits | None = None,
     semaphore: asyncio.Semaphore | None = None,
     faults: dict[str, FaultSelection] | None = None,
-    graph: Literal["current", "explicit"] = "current",
+    graph: GraphVariant = DEFAULT_GRAPH,
 ) -> Path:
     """Run one fresh investigation. Each run owns its graph, files and fault counters."""
     from incident_investigator.reporting import export_report
 
-    if graph not in {"current", "explicit"}:
+    if graph not in {"hub", "staged"}:
         raise ValueError(f"unknown graph: {graph}")
     limits = limits or Limits()
     run_id = identity()

@@ -16,7 +16,7 @@ from incident_investigator.runtime import Control, Investigation, investigate
 from incident_investigator.sources.loader import load_snapshot
 
 
-def runner(tmp_path, variant, model=None):
+def runner(tmp_path, variant="staged", model=None):
     return Investigation(
         load_snapshot("dev-00"),
         model or ScriptedModel(),
@@ -27,8 +27,8 @@ def runner(tmp_path, variant, model=None):
     )
 
 
-def test_explicit_topology_exposes_stage_order_and_role_call_loops(tmp_path):
-    compiled = runner(tmp_path, "explicit").graph().compile()
+def test_staged_topology_exposes_stage_order_and_role_call_loops(tmp_path):
+    compiled = runner(tmp_path).graph().compile()
     top = compiled.get_graph()
     assert "controller" not in top.nodes
     assert {
@@ -61,7 +61,7 @@ def test_explicit_topology_exposes_stage_order_and_role_call_loops(tmp_path):
     assert ("gathering:tool", "gathering:commit") in edges
 
 
-@pytest.mark.parametrize("variant", ["current", "explicit"])
+@pytest.mark.parametrize("variant", ["hub", "staged"])
 async def test_resume_does_not_repeat_completed_model_or_tool_calls(tmp_path, variant):
     class Crash(Scenario):
         crashed = False
@@ -103,7 +103,7 @@ async def test_resume_does_not_repeat_completed_model_or_tool_calls(tmp_path, va
 
 async def test_graph_labels_flow_through_results_trace_grades_and_leaderboard(tmp_path):
     grades = []
-    for variant in ("current", "explicit"):
+    for variant in ("hub", "staged"):
         directory = await investigate(
             load_snapshot("dev-00"),
             Scenario(followup=False),
@@ -120,11 +120,11 @@ async def test_graph_labels_flow_through_results_trace_grades_and_leaderboard(tm
     board = leaderboard(grades, tmp_path / "board")
     # Regression after concurrency/pass-metrics integration: standalone grades
     # have no suite_attempt; aggregating them must still retain both graph groups.
-    assert {row["graph"] for row in board["models"]} == {"current", "explicit"}
+    assert {row["graph"] for row in board["models"]} == {"hub", "staged"}
     assert all(row["runs"] == 1 for row in board["models"])
 
 
-@pytest.mark.parametrize("variant", ["current", "explicit"])
+@pytest.mark.parametrize("variant", [None, "staged", "hub"])
 @pytest.mark.parametrize("command", ["investigate", "demo"])
 def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
     from incident_investigator.cli import main
@@ -132,8 +132,6 @@ def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
     args = [
         "incident-investigator",
         command,
-        "--graph",
-        variant,
         "--model",
         "scripted",
         "--script",
@@ -141,6 +139,8 @@ def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
         "--out",
         str(tmp_path),
     ]
+    if variant:
+        args += ["--graph", variant]
     if command == "investigate":
         args += ["--case", "dev-00"]
     monkeypatch.setattr("sys.argv", args)
@@ -149,5 +149,91 @@ def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
 
     directory = Path(capsys.readouterr().out.strip()).parent
     result = json.loads((directory / "result.json").read_text())
-    assert result["graph"] == variant
+    assert result["graph"] == (variant or "staged")
     assert result["status"] == "completed"
+    # Offline eval grades the selected run; it does not choose or run a topology.
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "incident-investigator",
+            "eval",
+            str(directory),
+            "--fault",
+            "bad_configuration",
+            "--out",
+            str(tmp_path / "grades"),
+        ],
+    )
+    main()
+    board = json.loads((tmp_path / "grades" / "leaderboard.json").read_text())
+    assert board["models"][0]["graph"] == (variant or "staged")
+
+
+async def test_api_and_control_default_to_staged(tmp_path, monkeypatch):
+    from incident_investigator import hub
+
+    def forbidden(*args):
+        raise AssertionError("default construction must not build the legacy hub")
+
+    monkeypatch.setattr(hub, "build_hub_graph", forbidden)
+    control = Control(run_id="default", case_id="dev-00", limits=Limits())
+    assert control.graph == "staged"
+    investigation = Investigation(
+        load_snapshot("dev-00"), ScriptedModel(), tmp_path, Limits(), asyncio.Semaphore(4)
+    )
+    assert "orchestrator_plan" in investigation.graph().compile().get_graph().nodes
+    directory = await investigate(load_snapshot("dev-00"), Scenario(followup=False), tmp_path)
+    result = json.loads((directory / "result.json").read_text())
+    assert result["graph"] == result["state"]["graph"] == "staged"
+
+
+@pytest.mark.parametrize("variant", [None, "hub"])
+def test_eval_suite_defaults_to_staged_and_supports_legacy_opt_in(
+    tmp_path,
+    monkeypatch,
+    variant,
+):
+    from incident_investigator.cli import main
+
+    args = [
+        "incident-investigator",
+        "eval-suite",
+        "--quick",
+        "--model",
+        "scripted",
+        "--models",
+        "scripted",
+        "--script",
+        "tests/scripted-demo.json",
+        "--budget-usd",
+        "0",
+        "--out",
+        str(tmp_path / "batch"),
+    ]
+    if variant:
+        args += ["--graph", variant]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+    batch = json.loads((tmp_path / "batch" / "batch.json").read_text())
+    board = json.loads((tmp_path / "batch" / "leaderboard.json").read_text())
+    assert batch["graph"] == (variant or "staged")
+    assert len(board["runs"]) == 5
+    assert all(row["graph"] == (variant or "staged") for row in board["models"])
+    assert all(
+        json.loads(path.read_text())["graph"] == (variant or "staged")
+        for path in (tmp_path / "batch").glob("*/result.json")
+    )
+
+
+@pytest.mark.parametrize("command", ["investigate", "demo", "eval-suite"])
+def test_graph_help_names_default_and_deprecated_option(monkeypatch, capsys, command):
+    from incident_investigator.cli import main
+
+    monkeypatch.setattr("sys.argv", ["incident-investigator", command, "--help"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "--graph {staged,hub}" in help_text
+    assert "staged (default)" in help_text
+    assert "hub: deprecated; removed if final evaluation shows no difference" in help_text

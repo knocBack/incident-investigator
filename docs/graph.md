@@ -1,34 +1,49 @@
 # Graph variants
 
-`--graph current|explicit` is available on `investigate`, `demo`, and `eval-suite`.
-The default remains `current`. Results, trace events, grades, batch metadata and
-leaderboard rows record `graph`; leaderboard aggregation separates variants even
-when all model selections match. Older artifacts without the field mean `current`.
+Investigations, demos, and evaluation suites use **staged** by default. The Python
+`investigate()` API, `Investigation`, and `Control` use the same default, including
+the lab snapshot demo. No graph flag is needed for ordinary runs.
 
-The current graph centralizes workflow routing, receipt validation and call admission
-in `controller`. Its advantages are a single owner of authoritative state, global
-budgets and dedupe, parallel `Send` workers, and a checkpoint per external call.
-Its topology hides the stage sequence inside `advance()`.
+`--graph staged|hub` is available on `investigate`, `demo`, and `eval-suite`.
+**hub is deprecated; removed if final evaluation shows no difference.** It remains
+available only as an optional comparison path, selected with `--graph hub`.
+The final diagnostic evaluation is still pending; no paid evaluation is required
+for this change. Offline `eval` grades existing run artifacts and preserves the
+graph that produced each run, rather than selecting or executing a graph.
 
-The explicit graph puts stage routing in conditional edges. Planning, gathering,
-reasoning, critic review, orchestrator decisions and reporting are compiled subgraphs.
-Each contains a model/commit loop; gathering also fans out individual tools with
-`Send`. Expand subgraphs (`get_graph(xray=True)`) to see Observability and Dependency.
-They share the gathering commit/admission boundary so simultaneous tasks cannot race
-on global call budgets, fault counters, evidence provenance or cross-task dedupe.
-These role workers run in parallel; stage transitions wait for the entire batch.
+Results, trace events, grades, batch metadata and leaderboard rows record `graph`.
+Leaderboard aggregation separates variants even when all model selections match.
+Historical artifact labels `current` and `explicit` are read as `hub` and `staged`,
+respectively. Artifacts predating graph selection belong to `hub`.
+
+## Staged workflow
+
+The primary build path is `staged.build_staged_graph()`. Stage routing lives in
+conditional edges. Planning, gathering, reasoning, critic review, orchestrator
+decisions and reporting are compiled subgraphs. Each contains a model/commit loop;
+gathering also fans out individual tools with `Send`. Expand subgraphs
+(`get_graph(xray=True)`) to see Observability and Dependency. They share the
+gathering commit/admission boundary so simultaneous tasks cannot race on global
+call budgets, fault counters, evidence provenance or cross-task dedupe. These role
+workers run in parallel; stage transitions wait for the entire batch.
+
+The legacy controller workflow lives in `hub.build_hub_graph()`, `hub.controller()`
+and `hub.advance()`. The runtime imports it only when `hub` is explicitly selected.
+It centralizes workflow routing, receipt validation and call admission in a hub.
+Its topology hides the stage sequence inside the legacy stage machine.
 
 Both variants reuse the same task construction, prompts, schemas, call execution,
 validation/repair/commit, ID allocation, provenance checks, admission limits,
-dedupe, review accounting and report export. The explicit graph never calls
-`controller()` or `advance()`. Its extra stage-entry/settlement checkpoints mean
-revision numbers, checkpoint counts and wall time need not match the current graph.
-`Control.stage` remains context for shared validation, not the workflow dispatcher.
-Control has a single writer per superstep; parallel workers publish immutable
-receipts through the identity-checking `inbox` reducer. Both use the same
+dedupe, review accounting and report export. Staged never calls the legacy
+controller or stage machine. Its extra stage-entry/settlement checkpoints mean
+revision numbers, checkpoint counts and wall time need not match hub.
+`Control.stage` remains context for shared validation, not the staged workflow
+dispatcher. Control has a single writer per superstep; parallel workers publish
+immutable receipts through the identity-checking `inbox` reducer. Both use the same
 `AsyncSqliteSaver` and `durability="sync"` at invocation; child checkpoints inherit
-the saver. Global exhaustion exports the same partial fallback without another model
-call. Failed control roles route to Reporting; failed Reporting retains partial artifacts.
+the saver. Global exhaustion exports the same partial fallback without another
+model call. Failed control roles route to Reporting; failed Reporting retains
+partial artifacts.
 
 ## Inspect the compiled topology
 
@@ -43,7 +58,7 @@ from incident_investigator.models import ScriptedModel
 from incident_investigator.runtime import Investigation
 from incident_investigator.sources.loader import load_snapshot
 
-for variant in ("current", "explicit"):
+for variant in ("staged", "hub"):
     runner = Investigation(
         load_snapshot("dev-00"),
         ScriptedModel(),
@@ -56,47 +71,7 @@ for variant in ("current", "explicit"):
     print(graph.get_graph(xray=True).draw_mermaid())
 ```
 
-## Current
-
-```mermaid
----
-config:
-  flowchart:
-    curve: linear
----
-graph TD;
-	__start__([<p>__start__</p>]):::first
-	controller(controller)
-	orchestrator(orchestrator)
-	observability(observability)
-	dependency(dependency)
-	reasoning(reasoning)
-	critic(critic)
-	reporting(reporting)
-	tool(tool)
-	__end__([<p>__end__</p>]):::last
-	__start__ --> controller;
-	controller -.-> __end__;
-	controller -.-> critic;
-	controller -.-> dependency;
-	controller -.-> observability;
-	controller -.-> orchestrator;
-	controller -.-> reasoning;
-	controller -.-> reporting;
-	controller -.-> tool;
-	critic --> controller;
-	dependency --> controller;
-	observability --> controller;
-	orchestrator --> controller;
-	reasoning --> controller;
-	reporting --> controller;
-	tool --> controller;
-	classDef default fill:#f2f0ff,line-height:1.2
-	classDef first fill-opacity:0
-	classDef last fill:#bfb6fc
-```
-
-## Explicit
+## Staged (default)
 
 ```mermaid
 ---
@@ -196,12 +171,52 @@ graph TD;
 	classDef last fill:#bfb6fc
 ```
 
+## Hub (deprecated)
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	controller(controller)
+	orchestrator(orchestrator)
+	observability(observability)
+	dependency(dependency)
+	reasoning(reasoning)
+	critic(critic)
+	reporting(reporting)
+	tool(tool)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> controller;
+	controller -.-> __end__;
+	controller -.-> critic;
+	controller -.-> dependency;
+	controller -.-> observability;
+	controller -.-> orchestrator;
+	controller -.-> reasoning;
+	controller -.-> reporting;
+	controller -.-> tool;
+	critic --> controller;
+	dependency --> controller;
+	observability --> controller;
+	orchestrator --> controller;
+	reasoning --> controller;
+	reporting --> controller;
+	tool --> controller;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
 ## Fast local comparison
 
 ```sh
 uv run pytest -q tests/test_m3_agents.py tests/test_quality.py tests/test_graph.py
-uv run incident-investigator eval-suite --graph current --model scripted --models scripted --script tests/scripted-demo.json --quick --faults all --budget-usd 0 --out /tmp/ii-current
-uv run incident-investigator eval-suite --graph explicit --model scripted --models scripted --script tests/scripted-demo.json --quick --faults all --budget-usd 0 --out /tmp/ii-explicit
+uv run incident-investigator eval-suite --model scripted --models scripted --script tests/scripted-demo.json --quick --faults all --budget-usd 0 --out /tmp/ii-staged
+uv run incident-investigator eval-suite --graph hub --model scripted --models scripted --script tests/scripted-demo.json --quick --faults all --budget-usd 0 --out /tmp/ii-hub
 ```
 
 `--quick` runs the five fault jobs with concurrency 5. Each job receives the selected
@@ -211,7 +226,9 @@ The runtime E2E and quality scenarios are parametrized across both variants, cov
 parallel gathering, follow-up review, validation repairs, task/global budgets,
 no-progress/round/wall limits, tool timeout gaps, dedupe and Reporting fallback.
 A cancellation/resume test rebuilds each graph from its SQLite checkpoints and
-checks that completed model/tool calls are not repeated. CLI and grading tests check
-variant selection and separate leaderboard groups. The demo script intentionally
-reports an inconclusive diagnosis: these local runs check execution parity and
-artifacts, not live model accuracy. No paid calls are needed for this comparison.
+checks that completed model/tool calls are not repeated. Default-selection checks
+cover the API, CLI, lab demo and concurrent eval-suite jobs; CLI help identifies the
+legacy option as deprecated. Offline grading retains graph provenance, including
+historical labels, and keeps leaderboard groups separate. The demo script
+intentionally reports an inconclusive diagnosis: these local runs check execution
+and artifacts, not live model accuracy. No paid calls are needed for this comparison.
