@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Mapping
 from decimal import Decimal
 from uuid import uuid4
 
@@ -69,8 +71,23 @@ class SpendGuard:
         }
 
 
-def price_bound(info):
+def _pricing_tiers(pricing):
+    """Yield the base price map and every OpenRouter override price map."""
+    yield pricing
+    for override in pricing.get("overrides", []):
+        if isinstance(override, Mapping):
+            yield override
+
+
+def _rate(tiers, keys):
+    return max((amount(tier.get(key, 0)) for tier in tiers for key in keys), default=D(0))
+
+
+def price_bound(info, *, max_input_tokens=64000, output_tokens=4096):
     pricing = info["pricing"]
+    if not isinstance(pricing, Mapping):
+        raise ValueError("catalogue pricing must be an object")
+    tiers = list(_pricing_tiers(pricing))
     # Text-only requests contain no images, audio, web plugins or native tools.
     inactive = {"image", "audio", "input_audio_cache", "web_search"}
     token_rates = {
@@ -80,22 +97,33 @@ def price_bound(info):
         "input_cache_write",
         "internal_reasoning",
     }
-    for key, value in pricing.items():
-        if key not in inactive | token_rates and amount(value or 0) != 0:
-            raise ValueError(f"unsupported nonzero catalogue price: {key}")
-    # Include cache rates conservatively, even when the provider discounts them.
-    prompt = sum(
-        (amount(pricing.get(k, 0)) for k in ("prompt", "input_cache_read", "input_cache_write")),
-        D(0),
+    for tier in tiers:
+        for key, value in tier.items():
+            if key == "overrides" or key.startswith("min_"):
+                continue
+            if key.startswith("input_cache_"):
+                continue
+            if key not in inactive | token_rates and amount(value or 0) != 0:
+                raise ValueError(f"unsupported nonzero catalogue price: {key}")
+    # A prompt token is billed at one prompt/cache rate, never their sum.  Overrides
+    # are tiered catalogue prices, so reserve the most expensive possible tier.
+    prompt = _rate(
+        tiers,
+        ("prompt", *[key for tier in tiers for key in tier if key.startswith("input_cache_")]),
     )
-    completion = max(amount(pricing["completion"]), amount(pricing.get("internal_reasoning", 0)))
-    return (amount(info["context_length"]) * prompt + D(4096) * completion) * D("1.10")
+    completion = _rate(tiers, ("completion", "internal_reasoning"))
+    prompt_tokens = min(amount(info["context_length"]), amount(max_input_tokens))
+    return (prompt_tokens * prompt + amount(output_tokens) * completion) * D("1.10")
 
 
 class BoundedModel:
-    def __init__(self, adapter, catalog, guard):
+    def __init__(self, adapter, catalog, guard, *, max_input_tokens=64000):
         self.adapter, self.catalog, self.guard = adapter, catalog, guard
+        self.max_input_tokens = int(max_input_tokens)
+        if self.max_input_tokens < 1:
+            raise ValueError("max input tokens must be positive")
         original = adapter.build_request
+        self._build_request = original
 
         def configured(messages, schema, model, *, structured):
             request = original(messages, schema, model, structured=structured)
@@ -114,7 +142,26 @@ class BoundedModel:
 
     async def complete(self, messages, schema):
         model = self.model_for_role(_role(messages))
-        ident = await self.guard.reserve(price_bound(self.catalog[model]))
+        # Build locally first: this includes the adapter's fallback instruction and
+        # lets the guard refuse an oversize prompt before any provider request.
+        preview = self._build_request(messages, schema, model, structured=False)
+        prompt_bytes = len(
+            json.dumps(
+                {"messages": preview["messages"], "schema": schema},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if (prompt_bytes + 2) // 3 > self.max_input_tokens:
+            raise ModelCallError("suite input token limit refused call", retryable=False)
+        output_tokens = max(4096, int(preview.get("max_tokens", 4096)))
+        ident = await self.guard.reserve(
+            price_bound(
+                self.catalog[model],
+                max_input_tokens=self.max_input_tokens,
+                output_tokens=output_tokens,
+            )
+        )
         try:
             result = await self.adapter.complete(messages, schema)
         except BaseException:

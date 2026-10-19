@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from incident_investigator.grading.budget import SpendGuard, price_bound
+from incident_investigator.grading.budget import BoundedModel, SpendGuard, price_bound
 from incident_investigator.grading.grader import FAMILIES, expectation, grade, grade_run, matches
 from incident_investigator.grading.suite import run_suite
 from incident_investigator.lab.app import MemoryTelemetrySink, create_app
@@ -331,7 +331,64 @@ def test_catalogue_cache_reasoning_and_inactive_modalities_are_bounded():
             "web_search": "1",
         },
     }
-    assert price_bound(info) == (Decimal(".0016") + 4096 * Decimal(".000003")) * Decimal("1.10")
+    assert price_bound(info) == (Decimal(".001") + 4096 * Decimal(".000003")) * Decimal("1.10")
+
+
+def test_catalogue_cache_variants_and_overrides_use_highest_prompt_side_rate():
+    haiku = {
+        "context_length": 1_000_000,
+        "pricing": {
+            "prompt": ".0000001",
+            "completion": ".0000005",
+            "input_cache_write_1h": ".0000002",
+            "overrides": [
+                {
+                    "min_prompt_tokens": 100_000,
+                    "prompt": ".0000005",
+                    "completion": ".0000025",
+                    "input_cache_write_1h": ".000001",
+                }
+            ],
+        },
+    }
+    gemini = {
+        "context_length": 1_048_576,
+        "pricing": {
+            "prompt": ".00000025",
+            "completion": ".0000015",
+            "input_cache_read": ".000000025",
+            "input_cache_write": ".0000000833333333333333",
+            "internal_reasoning": ".0000015",
+        },
+    }
+    assert price_bound(haiku) == Decimal(".08166400")
+    assert price_bound(gemini) == Decimal(".02435840000000000000000000000")
+
+
+async def test_bounded_model_refuses_oversize_prompt_without_provider_request():
+    import os
+    from unittest.mock import AsyncMock, patch
+
+    from incident_investigator.models import OpenRouterModel
+
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "synthetic-test-key"}):
+        adapter = OpenRouterModel()
+    model = adapter.model_for_role("orchestrator")
+    bounded = BoundedModel(
+        adapter,
+        {
+            model: {
+                "context_length": 1000,
+                "pricing": {"prompt": ".000001", "completion": ".000002"},
+            }
+        },
+        SpendGuard(0, 1),
+        max_input_tokens=10,
+    )
+    adapter.complete = AsyncMock()
+    with pytest.raises(ModelCallError, match="input token limit"):
+        await bounded.complete([{"role": "user", "content": "x" * 100}], {})
+    adapter.complete.assert_not_awaited()
 
 
 async def test_returned_cost_over_reservation_fences_later_calls():
@@ -381,3 +438,68 @@ async def test_suite_stops_launching_when_price_reservation_exceeds_cap(tmp_path
     board = await run_suite(args, demo_fn=forbidden)
     assert board["runs"] == []
     assert (args.out / "budget-stop.json").exists()
+
+
+async def test_suite_skips_unaffordable_model_and_runs_later_model(tmp_path, monkeypatch):
+    import json
+
+    import httpx
+
+    from incident_investigator.grading import suite
+    from incident_investigator.models import OpenRouterModel
+
+    async def usage(client):
+        return 0
+
+    async def catalogue(client, url, **kwargs):
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "data": [
+                    {
+                        "id": "test/unaffordable",
+                        "context_length": 1000,
+                        "pricing": {"prompt": ".001", "completion": ".001"},
+                    },
+                    {
+                        "id": "test/cheap",
+                        "context_length": 1000,
+                        "pricing": {"prompt": "0", "completion": "0"},
+                    },
+                ]
+            },
+        )
+
+    async def completion(self, messages, schema):
+        from incident_investigator.models.adapter import ModelResult, ModelUsage
+
+        return ModelResult({}, ModelUsage(1, 1, 0), 0, "synthetic")
+
+    async def fake_demo(args):
+        from incident_investigator import cli
+
+        await cli.model(args).complete([], {})
+        directory = args.out / "synthetic"
+        directory.mkdir()
+        (directory / "result.json").write_text(json.dumps(result()))
+        return directory
+
+    monkeypatch.setattr(suite, "key_usage", usage)
+    monkeypatch.setattr(httpx.AsyncClient, "get", catalogue)
+    monkeypatch.setattr(OpenRouterModel, "complete", completion)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-test-key")
+    args = Namespace(
+        faults="bad_configuration",
+        models="test/unaffordable,test/cheap",
+        model="openrouter",
+        repeats=1,
+        budget_usd=".01",
+        out=tmp_path / "batch",
+    )
+    board = await run_suite(args, demo_fn=fake_demo)
+    assert len(board["runs"]) == 1
+    assert board["runs"][0]["suite_attempt"]["model"] == "test/cheap"
+    batch = json.loads((args.out / "batch.json").read_text())
+    assert batch["skipped"][0]["model"] == "test/unaffordable"
+    assert board["skipped"] == batch["skipped"]
