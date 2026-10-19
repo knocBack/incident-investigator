@@ -6,8 +6,8 @@ import asyncio
 import json
 import math
 import os
-import re
 import random
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -217,7 +217,9 @@ class OpenRouterModel:
                                 delay = max(0.0, float(retry_after)) if retry_after else 0.0
                             except ValueError:
                                 delay = 0.0
-                            await asyncio.sleep(max(delay, 0.25 * (2**attempt) + random.uniform(0, 0.1)))
+                            await asyncio.sleep(
+                                max(delay, 0.25 * (2**attempt) + random.uniform(0, 0.1))
+                            )
 
                 try:
                     body = await post(structured)
@@ -232,7 +234,9 @@ class OpenRouterModel:
             raise ModelCallError("OpenRouter request timed out", retryable=True) from None
         except httpx.HTTPError as exc:
             raise ModelCallError(
-                f"OpenRouter transport failure: {type(exc).__name__}", retryable=True, before_response=True
+                f"OpenRouter transport failure: {type(exc).__name__}",
+                retryable=True,
+                before_response=True,
             ) from None
         usage = body.get("usage") or {}
         if not isinstance(usage, dict):
@@ -276,9 +280,12 @@ class OpenRouterModel:
     async def generation_cost(self, generation_id: str) -> float | None:
         """Best-effort cost lookup for a completed response without usage."""
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self._transport) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds, transport=self._transport
+            ) as client:
                 response = await client.get(
-                    f"{BASE_URL}/generation", params={"id": generation_id},
+                    f"{BASE_URL}/generation",
+                    params={"id": generation_id},
                     headers={"Authorization": f"Bearer {self._key}"},
                 )
                 body = self._response(response)
@@ -286,4 +293,8 @@ class OpenRouterModel:
             return None
         data = body.get("data", body)
         cost = data.get("total_cost", data.get("cost")) if isinstance(data, dict) else None
-        return cost if isinstance(cost, int | float) and not isinstance(cost, bool) and cost >= 0 else None
+        return (
+            cost
+            if isinstance(cost, int | float) and not isinstance(cost, bool) and cost >= 0
+            else None
+        )

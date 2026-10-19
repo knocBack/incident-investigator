@@ -111,7 +111,9 @@ async def test_mandatory_or_unknown_reasoning_uses_provider_default(configured, 
 
 
 @pytest.mark.parametrize("code,retryable", [(401, False), (402, False), (429, True), (503, True)])
-async def test_http_failures_are_clear_redacted_and_retried_when_transient(configured, code, retryable):
+async def test_http_failures_are_clear_redacted_and_retried_when_transient(
+    configured, code, retryable
+):
     calls = 0
 
     def handler(request):

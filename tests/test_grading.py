@@ -187,7 +187,6 @@ async def test_guard_reservations_are_atomic_under_concurrency():
 
 
 async def test_429_releases_bounded_reservation():
-    from incident_investigator.models.adapter import ModelResult, ModelUsage
 
     class Adapter:
         def model_for_role(self, role):
@@ -200,8 +199,11 @@ async def test_429_releases_bounded_reservation():
             raise ModelCallError("rate limited", retryable=True, status=429, before_response=True)
 
     guard = SpendGuard(0, 1)
-    bounded = BoundedModel(Adapter(), {"test/model": {"context_length": 1,
-                           "pricing": {"prompt": 0, "completion": 0}}}, guard)
+    bounded = BoundedModel(
+        Adapter(),
+        {"test/model": {"context_length": 1, "pricing": {"prompt": 0, "completion": 0}}},
+        guard,
+    )
     with pytest.raises(ModelCallError):
         await bounded.complete([], {})
     assert guard.snapshot()["active"] == "0" and guard.unknown == 0
@@ -225,8 +227,15 @@ async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path):
         (directory / "result.json").write_text(json.dumps(result()))
         return directory
 
-    args = Namespace(faults="all", models="scripted", model="scripted", repeats=1,
-                     concurrency=5, budget_usd="0", out=tmp_path / "batch")
+    args = Namespace(
+        faults="all",
+        models="scripted",
+        model="scripted",
+        repeats=1,
+        concurrency=5,
+        budget_usd="0",
+        out=tmp_path / "batch",
+    )
     board = await run_suite(args, demo_fn=demo, model_factory=lambda _: ScriptedModel())
     assert len(board["runs"]) == 5
     assert len(list(args.out.glob("*/grade.json"))) == 5

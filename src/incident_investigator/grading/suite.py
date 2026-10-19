@@ -6,9 +6,9 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import time
-import math
 from collections import Counter
 from pathlib import Path
 from uuid import uuid4
@@ -39,8 +39,11 @@ def _fault_metrics(items, k):
         n = len(group)
         pass_at_k, pass_to_k = _pass_metrics(n, correct, min(k, n))
         metrics[fault] = {
-            "n": n, "correct": correct, "pass_at_k": pass_at_k,
-            "pass_to_k": pass_to_k, "k": min(k, n),
+            "n": n,
+            "correct": correct,
+            "pass_at_k": pass_at_k,
+            "pass_to_k": pass_to_k,
+            "k": min(k, n),
         }
     return metrics
 
@@ -193,11 +196,17 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 if guard:
                     try:
                         bound = price_bound(catalog[model_id], max_input_tokens=max_input_tokens)
-                        reason = None if guard.launch_allowed(bound) else "suite budget reservation cannot fit remaining budget"
+                        reason = (
+                            None
+                            if guard.launch_allowed(bound)
+                            else "suite budget reservation cannot fit remaining budget"
+                        )
                     except (KeyError, ValueError) as exc:
                         reason = str(exc)
                     if reason:
-                        batch["skipped"].append({"model": model_id, "fault": fault, "repeat": repeat, "reason": reason})
+                        batch["skipped"].append(
+                            {"model": model_id, "fault": fault, "repeat": repeat, "reason": reason}
+                        )
                         continue
                 jobs.append((model_id, repeat, fault))
             save(out / "batch.json", batch)
@@ -212,22 +221,32 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     else:
                         adapter = OpenRouterModel()
                         adapter._models = dict.fromkeys(adapter._models, model_id)
-                        adapter = BoundedModel(adapter, catalog, guard, max_input_tokens=max_input_tokens)
+                        adapter = BoundedModel(
+                            adapter, catalog, guard, max_input_tokens=max_input_tokens
+                        )
                     started = time.monotonic()
                     try:
                         directory = await (demo_fn or cli.demo)(
                             argparse.Namespace(
-                                model=args.model, script=None, out=out, fault=fault,
+                                model=args.model,
+                                script=None,
+                                out=out,
+                                fault=fault,
                                 _model_adapter=adapter,
                             )
                         )
                     except Exception as exc:
                         directory = out / str(uuid4())
                         directory.mkdir()
-                        save(directory / "attempt-error.json", {
-                            "exception_type": type(exc).__name__, "model": model_id,
-                            "fault": fault, "repeat": repeat,
-                        })
+                        save(
+                            directory / "attempt-error.json",
+                            {
+                                "exception_type": type(exc).__name__,
+                                "model": model_id,
+                                "fault": fault,
+                                "repeat": repeat,
+                            },
+                        )
                     g = grade_run(directory, expectation(fault))
                     g["resources"]["wall_seconds"] = time.monotonic() - started
                     g["suite_attempt"] = {"model": model_id, "repeat": repeat, "fault": fault}
@@ -259,8 +278,12 @@ def add_commands(sub):
     command.add_argument("--models", required=True)
     command.add_argument("--repeats", type=int)
     command.add_argument("--concurrency", type=int)
-    command.add_argument("--quick", action="store_true", help="five faults once, with concurrency 5")
-    command.add_argument("--k", type=int, default=4, help="pass@k/pass^k reporting cap (default: 4)")
+    command.add_argument(
+        "--quick", action="store_true", help="five faults once, with concurrency 5"
+    )
+    command.add_argument(
+        "--k", type=int, default=4, help="pass@k/pass^k reporting cap (default: 4)"
+    )
     command.add_argument("--budget-usd", required=True)
     command.add_argument("--max-input-tokens", type=int, default=64000)
     command.add_argument("--out", type=Path, required=True)
