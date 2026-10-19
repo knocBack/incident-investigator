@@ -175,11 +175,13 @@ Keep lessons actionable: source -> observed problem -> design rule -> verificati
 
 ## Deliverables and current state
 
-Required final delivery: runnable implementation/setup, architecture diagram and coordination explanation, synthetic dataset and automated tests, single-versus-multi evaluation results, a technical note of at most 500 words, and the coding-assistant transcript.
+Required outputs: runnable implementation/setup, architecture diagram and coordination explanation, synthetic dataset and automated tests, single-versus-multi evaluation results, and a short technical note.
 
-Completed here: finalized PRD, incident/evaluation specification and task rubric, accepted HLD-01/02/03, LLD-01 common/specialist lifecycle, LLD-02 JSONL/tool/page/fault contracts and controlled-test configuration, the consolidated remaining-contracts handoff, earlier scratch probes, and saved conversation checkpoints. Coverage remains in the existing planned HLD groups.
+Completed (checkpoint 2026-10-19): PRD, HLD and LLD documents; the fault-injection lab with five fault families; five frozen evidence tools plus catalog and aggregation helpers; the six-role investigation on the staged LangGraph graph (default) with the deprecated hub graph behind `--graph hub`; the OpenRouter adapter with repair of harmless deviations, query de-duplication and per-call timeouts; the automatic grader, `eval` and `eval-suite` with pass@k/pass^k, quick mode, concurrency and an accurate budget cap; and 210 automated tests.
 
-Not completed: remaining role/coordination LLD, paid-model settings, runnable fixtures/tools/agents, product tests, graph/checkpointer integration validation, benchmark results, validated diagnostic readiness, implementation-verified architecture, or the submission technical note. The saved configuration has no application loader yet. Documentation checks and primitive probes are not product validation. Refresh the separate conversation export before submission.
+In testing: the local eval console with live Arize Phoenix traces.
+
+Not completed: M4 reliability hardening (public resume, crash/replay, tool-failure recovery), the ten-incident benchmark with two reliability variants, the single-agent baseline, the single-versus-multi comparison, pass@4 measurement, and a validated diagnostic threshold. Results so far are exploratory (see the README).
 
 ## Design evidence
 
