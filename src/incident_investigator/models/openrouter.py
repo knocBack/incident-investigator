@@ -168,6 +168,7 @@ class OpenRouterModel:
             "messages": rendered,
             "response_format": response_format,
             "stream": False,
+            "usage": {"include": True},
             "max_tokens": 4096,
             "provider": {"require_parameters": True, "allow_fallbacks": False},
         }
@@ -175,6 +176,7 @@ class OpenRouterModel:
     async def complete(self, messages: Sequence[Mapping[str, Any]], schema: dict) -> ModelResult:
         model = self.model_for_role(_role(messages))
         started = time.perf_counter()
+        received_response = False
         try:
             async with (
                 asyncio.timeout(self.timeout_seconds),
@@ -192,6 +194,7 @@ class OpenRouterModel:
                 reasoning = info.get("reasoning")
 
                 async def post(structured: bool) -> dict:
+                    nonlocal received_response
                     request = self.build_request(messages, schema, model, structured=structured)
                     if (
                         "reasoning" in info.get("supported_parameters", [])
@@ -200,11 +203,16 @@ class OpenRouterModel:
                     ):
                         request["reasoning"] = {"enabled": False}
                     for attempt in range(3):
-                        response = await client.post(
+                        async with client.stream(
+                            "POST",
                             f"{BASE_URL}/chat/completions",
                             headers={"Authorization": f"Bearer {self._key}"},
                             json=request,
-                        )
+                        ) as response:
+                            # A timeout before headers is unbilled. Once a successful
+                            # response starts, an interrupted body may still be billed.
+                            received_response = response.is_success
+                            await response.aread()
                         try:
                             return self._response(response)
                         except ModelCallError as exc:
@@ -231,12 +239,16 @@ class OpenRouterModel:
                     self._schema_rejected.add(model)
                     body = await post(False)
         except (TimeoutError, httpx.TimeoutException):
-            raise ModelCallError("OpenRouter request timed out", retryable=True) from None
+            raise ModelCallError(
+                "OpenRouter request timed out",
+                retryable=True,
+                before_response=not received_response,
+            ) from None
         except httpx.HTTPError as exc:
             raise ModelCallError(
                 f"OpenRouter transport failure: {type(exc).__name__}",
                 retryable=True,
-                before_response=True,
+                before_response=not received_response,
             ) from None
         usage = body.get("usage") or {}
         if not isinstance(usage, dict):
@@ -295,6 +307,9 @@ class OpenRouterModel:
         cost = data.get("total_cost", data.get("cost")) if isinstance(data, dict) else None
         return (
             cost
-            if isinstance(cost, int | float) and not isinstance(cost, bool) and cost >= 0
+            if isinstance(cost, int | float)
+            and not isinstance(cost, bool)
+            and math.isfinite(cost)
+            and cost >= 0
             else None
         )

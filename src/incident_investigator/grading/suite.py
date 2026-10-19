@@ -202,7 +202,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
             for model_id, repeat, fault in candidates:
                 if guard:
                     try:
-                        bound = price_bound(catalog[model_id], max_input_tokens=max_input_tokens)
+                        # Only preflight the output floor here. The actual prompt is
+                        # bounded and reserved atomically immediately before each call.
+                        bound = price_bound(catalog[model_id], max_input_tokens=0)
                         reason = (
                             None
                             if guard.launch_allowed(bound)
@@ -294,7 +296,7 @@ def add_commands(sub):
     command.add_argument(
         "--k", type=int, default=4, help="pass@k/pass^k reporting cap (default: 4)"
     )
-    command.add_argument("--budget-usd", required=True)
+    command.add_argument("--budget-usd", default="2.00")
     command.add_argument("--max-input-tokens", type=int, default=64000)
     command.add_argument("--out", type=Path, required=True)
     command.add_argument("--script", type=Path)

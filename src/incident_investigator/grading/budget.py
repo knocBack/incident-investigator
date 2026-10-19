@@ -1,4 +1,4 @@
-"""Conservative shared batch reservations, including failed/unknown usage."""
+"""Request-sized shared reservations with provider cost settlement."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def amount(value):
 class SpendGuard:
     def __init__(self, initial, cap):
         self.initial, self.cap = amount(initial), amount(cap)
-        self.key_delta = self.returned = self.unknown = D(0)
+        self.key_delta = self.returned = self.unknown = self.estimated = D(0)
         self.active = {}
         self.records = []
         self.lock = asyncio.Lock()
@@ -39,6 +39,7 @@ class SpendGuard:
         return self.charged() + sum(self.active.values(), D(0)) + bound <= self.cap
 
     async def reserve(self, bound):
+        bound = amount(bound)
         async with self.lock:
             if not self.launch_allowed(bound):
                 raise ModelCallError("suite budget reservation refused call", retryable=False)
@@ -46,16 +47,25 @@ class SpendGuard:
             self.active[ident] = bound
             return ident
 
-    async def finish(self, ident, cost):
+    async def finish(self, ident, cost, *, source="response"):
+        cost = amount(cost) if cost is not None else None
         async with self.lock:
             bound = self.active.pop(ident)
             if cost is None:
                 self.unknown += bound
             else:
-                self.returned += amount(cost)
-                if amount(cost) > bound:
+                self.returned += cost
+                if source == "token_estimate":
+                    self.estimated += cost
+                if cost > bound:
                     self.unknown += self.cap + D(1)
-            self.records.append({"reservation": str(bound), "cost": cost})
+            self.records.append(
+                {
+                    "reservation": str(bound),
+                    "cost": str(cost) if cost is not None else None,
+                    "source": source if cost is not None else "unresolved",
+                }
+            )
 
     async def release(self, ident):
         async with self.lock:
@@ -68,6 +78,8 @@ class SpendGuard:
             for k, v in {
                 "cap": self.cap,
                 "returned": self.returned,
+                "estimated": self.estimated,
+                "drift": self.key_delta - self.returned,
                 "unknown_reserve": self.unknown,
                 "key_delta": self.key_delta,
                 "active": sum(self.active.values(), D(0)),
@@ -157,13 +169,16 @@ class BoundedModel:
                 separators=(",", ":"),
             ).encode("utf-8")
         )
-        if (prompt_bytes + 2) // 3 > self.max_input_tokens:
+        # Byte count bounds text tokenization without assuming a particular model's
+        # tokenizer. Allow framing overhead per message; include both schema modes.
+        prompt_tokens = prompt_bytes + 32 * len(preview["messages"]) + 256
+        if prompt_tokens > self.max_input_tokens:
             raise ModelCallError("suite input token limit refused call", retryable=False)
-        output_tokens = max(4096, int(preview.get("max_tokens", 4096)))
+        output_tokens = int(preview.get("max_tokens", 4096))
         ident = await self.guard.reserve(
             price_bound(
                 self.catalog[model],
-                max_input_tokens=self.max_input_tokens,
+                max_input_tokens=prompt_tokens,
                 output_tokens=output_tokens,
             )
         )
@@ -179,7 +194,24 @@ class BoundedModel:
             await self.guard.finish(ident, None)
             raise
         cost = result.usage.cost if result.usage else None
-        if cost is None and result.raw_id and hasattr(self.adapter, "generation_cost"):
-            cost = await self.adapter.generation_cost(result.raw_id)
-        await self.guard.finish(ident, cost)
+        source = "response"
+        try:
+            if cost is None and result.raw_id and hasattr(self.adapter, "generation_cost"):
+                cost = await self.adapter.generation_cost(result.raw_id)
+                source = "generation"
+            if cost is None and result.usage is not None:
+                usage = result.usage
+                if usage.input_tokens is not None and usage.output_tokens is not None:
+                    cost = price_bound(
+                        self.catalog[model],
+                        max_input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                    )
+                    source = "token_estimate"
+            await self.guard.finish(ident, cost, source=source)
+        except BaseException:
+            # Cancellation during lookup must not strand an active reservation.
+            if ident in self.guard.active:
+                await self.guard.finish(ident, None)
+            raise
         return result
