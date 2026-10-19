@@ -2,7 +2,16 @@
 
 Local multi-agent incident investigation MVP.
 
-Status: M0 scaffolding only.
+Status: M2 frozen-source retrieval tools and deterministic model adapter.
+
+## Try the retrieval tools
+
+```sh
+uv run python -m incident_investigator.tools
+```
+
+The command loads frozen `dev-00` and prints one JSON page from each retrieval
+source. It does not access the live lab or produce a diagnosis.
 
 ## Run the lab
 
