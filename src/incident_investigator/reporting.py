@@ -20,7 +20,7 @@ def retain_snapshot(snapshot: CaseSnapshot, out: Path) -> None:
     write_json(frozen / "alert.json", dict(snapshot.alert))
     write_json(frozen / "fault-plan.json", dict(snapshot.fault_plan))
     (frozen / "observations.jsonl").write_text(
-        "".join(row.model_dump_json() + "\n" for row in snapshot.observations)
+        "".join(row.model_dump_json() + "\n" for row in snapshot.observations), encoding="utf-8"
     )
     write_json(
         frozen / "manifest.json",
@@ -91,7 +91,9 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "state": c,
         "receipts": inbox,
     }
-    (out / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+    (out / "result.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     lines = [
         f"# Incident {c['case_id']}",
         "",
@@ -188,4 +190,4 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         lines += [
             f"| {role} | {row['model']} | {row['model_calls']} | {row['tool_calls']} | {row['repairs']} | {row['input_tokens']} | {row['output_tokens']} | {row['cost']} | {row['latency_ms']} |"
         ]
-    (out / "report.md").write_text("\n".join(lines) + "\n")
+    (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

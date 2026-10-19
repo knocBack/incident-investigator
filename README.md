@@ -82,18 +82,17 @@ The agents only read a **frozen copy of the evidence**, never your live system. 
 
 | | |
 | --- | --- |
-| ✅ **Done** | Test shop with 5 failure types · evidence tools · six-agent investigation · automatic grading |
-| 🧪 **In testing** | Dashboard to launch runs and watch the agents think |
+| ✅ **Done** | Test shop with 5 failure types · evidence tools · six-agent investigation · automatic grading · local console with live Phoenix links |
 | 🔜 **Next** | See below |
 
 **Early result:** with DeepSeek V3.2, the agents found the right cause in **5 out of 5** test failures (one run each).
 
-## ✨ What's next
+## 👀 Explore the console
 
-Small steps, each one shippable on its own.
+Launch the [local console](#console) to inspect saved runs and open live Phoenix traces.
 
 ### 👀 Watch the agents think, live
-A dashboard to start an investigation and follow every step, tool call and decision as it happens.
+Start an investigation from the dashboard and follow its tool calls and decisions in Phoenix.
 
 <p align="center">
   <img src="docs/assets/console-runs.png" width="49%" alt="All runs in one place">
@@ -107,7 +106,7 @@ Every claim in the report links straight to the evidence behind it.
   <img src="docs/assets/console-detail.png" width="70%" alt="Run report with evidence">
 </p>
 
-### And then
+## ✨ What's next
 
 - [ ] 🔔 **Start from a real alert:** an alerting webhook kicks off an investigation automatically
 - [ ] 📈 **First real data source:** read live metrics from Prometheus

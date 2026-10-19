@@ -150,6 +150,31 @@ def test_utf8_artifacts_and_grading_timestamp(scripted_run, tmp_path):
     assert read_json(tmp_path / "second" / "grade.json")["graded_at"] == second["graded_at"]
 
 
+def test_retained_observations_use_utf8_on_legacy_locale(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from incident_investigator.reporting import retain_snapshot
+    from incident_investigator.sources.loader import load_snapshot
+
+    # Simulate a locale that cannot encode this evidence when encoding is omitted.
+    original = Path.write_text
+
+    def locale_write(path, text, encoding=None, **kwargs):
+        return original(path, text, encoding=encoding or "cp1252", **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", locale_write)
+    snapshot = load_snapshot("dev-00")
+    text = "診断: délai élevé"
+    row = snapshot.observations[0]
+    snapshot = replace(
+        snapshot, observations=(row.model_copy(update={"data": {**row.data, "note": text}}),)
+    )
+    retain_snapshot(snapshot, tmp_path)
+    raw = (tmp_path / "snapshot" / "observations.jsonl").read_bytes()
+    assert text.encode("utf-8") in raw
+    assert json.loads(raw)["data"]["note"] == text
+
+
 def test_all_run_tabs_and_rubric_save(repo, scripted_run):
     repo.runs.import_roots([scripted_run])
     ident = repo.runs.runs()[0]["id"]
