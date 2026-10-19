@@ -19,6 +19,9 @@ dependencies = [
   "uvicorn",
 ]
 
+[project.scripts]
+incident-investigator = "incident_investigator.cli:main"
+
 [dependency-groups]
 dev = [
   "pre-commit",

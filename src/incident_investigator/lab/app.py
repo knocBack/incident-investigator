@@ -73,9 +73,9 @@ def create_app(
             raise ValueError("lab clock must return an aware datetime")
         return value.astimezone(UTC)
 
-    def emit(source: str, data: dict[str, Any]) -> None:
+    def emit(source: str, data: dict[str, Any], *, event_time: datetime | None = None) -> None:
         app.state.sequence += 1
-        point = now()
+        point = event_time or now()
         sink.emit(
             SourceObservation(
                 source=source,
@@ -127,6 +127,7 @@ def create_app(
                 "sample_count": 1,
                 "attributes": attributes,
             },
+            event_time=point,
         )
 
     def metrics(service: str, latency_ms: float, error: bool, db_ms: float = 1.0) -> None:

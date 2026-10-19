@@ -271,8 +271,6 @@ async def metrics(snapshot: CaseSnapshot, **arguments: Any) -> ToolPage:
     end = datetime.fromisoformat(filters["end"].replace("Z", "+00:00"))
 
     def match(item: Any) -> bool:
-        if item.source != "history" or not _available(snapshot, item):
-            return False
         data = item.data
         if (
             item.source != "metrics"

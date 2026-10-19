@@ -72,3 +72,12 @@ def test_runtime_package_does_not_import_evaluator_files() -> None:
     source = "\n".join(path.read_text() for path in Path("src/incident_investigator").rglob("*.py"))
     assert "evals/" not in source
     assert "evals." not in source
+
+
+def test_real_clock_metric_event_time_matches_window_end() -> None:
+    sink = MemoryTelemetrySink()
+    with TestClient(create_app(telemetry_sink=sink)) as client:
+        assert client.post("/checkout").status_code == 200
+    metrics = [row for row in sink.observations if row.source == "metrics"]
+    assert metrics
+    assert all(row.event_time == datetime.fromisoformat(row.data["window_end"]) for row in metrics)

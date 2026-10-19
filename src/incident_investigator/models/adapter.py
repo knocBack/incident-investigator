@@ -49,6 +49,27 @@ class ScriptedModel:
         if not self.actions:
             raise RuntimeError("ScriptedModel has no queued action")
         action = self.actions.popleft()
+        # Generic context substitution keeps replay data in caller-owned scripts.
+        context = {}
+        for message in messages:
+            try:
+                candidate = json.loads(message.get("content", ""))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(candidate, dict) and "role" in candidate:
+                context = candidate
+                break
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith("{{context.") and value.endswith("}}"):
+                return context[value[10:-2]]
+            if isinstance(value, dict):
+                return {key: resolve(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [resolve(item) for item in value]
+            return value
+
+        action = resolve(action)
         if not isinstance(action, dict) or action.get("kind") not in {"tools", "final"}:
             raise ValueError("scripted action must be a tagged action")
         return ModelResult(action=action, usage=ModelUsage(), latency_ms=0.0, raw_id="scripted")
@@ -69,6 +90,12 @@ class CodexExecModel:
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
+            "--disable",
+            "shell_tool",
+            "--disable",
+            "unified_exec",
+            "-c",
+            'web_search="disabled"',
             "-s",
             "read-only",
             "--skip-git-repo-check",
@@ -107,8 +134,14 @@ class CodexExecModel:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(prompt.encode()), self.timeout_seconds
                 )
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                raise
             except TimeoutError:
-                process.kill()
+                if process.returncode is None:
+                    process.kill()
                 await process.wait()
                 raise TimeoutError("Codex CLI model call timed out") from None
             latency_ms = (time.perf_counter() - started) * 1000
@@ -130,7 +163,17 @@ def _events(raw: str) -> tuple[ModelUsage | None, str | None]:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        raw_id = event.get("id", raw_id) if isinstance(event, dict) else raw_id
+        if isinstance(event, dict) and event.get("type") == "thread.started":
+            raw_id = event.get("thread_id", raw_id)
+        if isinstance(event, dict):
+            item = event.get("item", {})
+            event_type = str(event.get("type", "")).lower()
+            item_type = str(item.get("type", "")).lower() if isinstance(item, dict) else ""
+            forbidden = ("command", "tool", "function_call", "web_search", "file_change")
+            if any(word in event_type or word in item_type for word in forbidden) or (
+                item_type and item_type not in {"agent_message", "reasoning"}
+            ):
+                raise RuntimeError("Codex emitted a forbidden command/tool execution event")
         usage = event.get("usage") if isinstance(event, dict) else None
         if isinstance(usage, dict):
             input_tokens = usage.get("input_tokens", input_tokens)

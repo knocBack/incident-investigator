@@ -23,7 +23,7 @@ class QueryModel(BaseModel):
     @field_validator("start", "end", "as_of", mode="before", check_fields=False)
     @classmethod
     def aware_time(cls, value: Any) -> Any:
-        if value is None or isinstance(value, datetime):
+        if not isinstance(value, str):
             return value
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
