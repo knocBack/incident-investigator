@@ -338,3 +338,25 @@ async def test_last_specialist_response_schema_only_allows_final(tmp_path):
     schema = model.requests[0][1]
     assert "ProviderTools" not in schema["$defs"]
     assert schema["properties"]["action"]["properties"]["kind"]["const"] == "final"
+
+
+async def test_rejected_strict_schema_falls_back_to_json_mode_once(configured):
+    modes = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=catalogue())
+        mode = json.loads(request.content)["response_format"]["type"]
+        modes.append(mode)
+        if mode == "json_schema":
+            return httpx.Response(
+                400, json={"error": {"code": 400, "message": "Schema is too complex"}}
+            )
+        return httpx.Response(200, json=response())
+
+    model = OpenRouterModel(transport=httpx.MockTransport(handler))
+    first = await model.complete(messages(), {"type": "object"})
+    second = await model.complete(messages(), {"type": "object"})
+    assert first.action["action"]["kind"] == second.action["action"]["kind"] == "final"
+    # The rejected schema mode is remembered: later calls go straight to JSON mode.
+    assert modes == ["json_schema", "json_object", "json_object"]

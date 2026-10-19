@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
-from functools import reduce
+from functools import cache, reduce
 from operator import or_
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
@@ -26,9 +27,17 @@ from incident_investigator.contracts import (
     action_type,
 )
 from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
+from incident_investigator.repair import (
+    Repairs,
+    Scope,
+    repair_action,
+    repair_decision,
+    repair_result,
+)
 from incident_investigator.sources.loader import CaseSnapshot
-from incident_investigator.tools import build_registry
+from incident_investigator.tools import DESCRIPTIONS, build_registry, query_identity
 from incident_investigator.tools.contracts import QUERY_MODELS, ToolPage
+from incident_investigator.tools.core import describe_validation
 from incident_investigator.tools.faults import FaultSelection, apply_fault
 
 
@@ -62,6 +71,7 @@ class Task(Record):
     model_calls: int = 0
     tool_calls: int = 0
     corrections: int = 0
+    repairs: int = 0
 
 
 class Call(Record):
@@ -74,6 +84,7 @@ class Call(Record):
     retry: int = 0
     retry_of: str | None = None
     fault: dict[str, Any] | None = None
+    query: str | None = None
 
 
 class Control(Record):
@@ -93,6 +104,10 @@ class Control(Record):
     processed: list[str] = Field(default_factory=list)
     tool_receipts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     coverage: list[str] = Field(default_factory=list)
+    # Normalized page identity -> receipt that already answered it (complete pages only).
+    query_index: dict[str, str] = Field(default_factory=dict)
+    repairs: dict[str, int] = Field(default_factory=dict)
+    deduplicated: dict[str, int] = Field(default_factory=dict)
     fault_counters: dict[str, int] = Field(default_factory=dict)
     rounds: int = 0
     no_progress: int = 0
@@ -132,6 +147,11 @@ def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 def provider_schema(role: str, *, allow_tools: bool = True) -> dict:
     """Concrete tool argument schemas avoid free-form objects in strict output."""
+    return copy.deepcopy(_provider_schema(role, allow_tools))
+
+
+@cache
+def _provider_schema(role: str, allow_tools: bool) -> dict:
     final = create_model(
         PAYLOADS[role].__name__ + "Final",
         __base__=Record,
@@ -232,9 +252,24 @@ class Investigation:
                 else {}
             ),
             "tools": {
-                name: QUERY_MODELS[name].model_json_schema()
-                for name in ALLOWED_TOOLS.get(role, set())
+                name: {
+                    "description": DESCRIPTIONS[name],
+                    "arguments": QUERY_MODELS[name].model_json_schema(),
+                }
+                for name in sorted(ALLOWED_TOOLS.get(role, set()))
             },
+            **(
+                {
+                    "budget": {
+                        "task_model_calls": control.limits.task_model_calls,
+                        "task_tool_calls": control.limits.task_tool_calls,
+                        "note": "Identical repeated queries are answered from earlier "
+                        "receipts without a tool call. Start with catalog to learn names.",
+                    }
+                }
+                if role in ALLOWED_TOOLS
+                else {}
+            ),
         }
         prompt += (
             "\nYou have NO native or callable tools. Retrieve data only by returning "
@@ -274,136 +309,49 @@ class Investigation:
                     "reason": reason,
                 }
 
-    def check_refs(self, value: Any, allowed: set[str]) -> None:
-        if isinstance(value, dict):
-            if (
-                "kind" in value
-                and value["kind"] in {"observation", "tool_receipt"}
-                and value.get("id") not in allowed
-            ):
-                raise ValueError("unknown or invisible evidence reference")
-            for key, item in value.items():
-                if key in {"supporting_evidence", "contradicting_evidence", "evidence_ids"}:
-                    if not set(item) <= allowed:
-                        raise ValueError("unknown or invisible evidence ID")
-                else:
-                    self.check_refs(item, allowed)
-        elif isinstance(value, list):
-            for item in value:
-                self.check_refs(item, allowed)
+    def scope(self, c: Control, task: Task) -> Scope:
+        visible = set(task.visible_refs)
+        hypotheses = (
+            c.tasks[c.hypothesis_revision].result["hypotheses"] if c.hypothesis_revision else []
+        )
+        return Scope(
+            observations=frozenset(visible & set(c.evidence)),
+            receipts=frozenset(visible & set(c.tool_receipts)),
+            revision=c.hypothesis_revision,
+            hypothesis_ids=frozenset(h["hypothesis_id"] for h in hypotheses),
+            objection_ids=tuple(c.objections),
+            alert_service=str(self.snapshot.alert.get("affected_service", "the affected service")),
+        )
 
-    def repair_decision(self, c: Control, task: Task, result: dict, call_id: str) -> dict:
-        """Normalize a structurally valid decision without trusting model references."""
-        warnings = []
-        dispositions = {}
-        for item in result["dispositions"]:
-            key = item["objection_id"]
-            if key not in c.objections or key in dispositions:
-                warnings.append(f"dropped unknown or duplicate objection disposition: {key}")
-                continue
-            dispositions[key] = dict(item)
-        for key in c.objections:
-            if key not in dispositions:
-                dispositions[key] = {
-                    "objection_id": key,
-                    "outcome": "unresolved",
-                    "reason": "not disposed by orchestrator",
-                }
-                warnings.append(f"runtime marked objection unresolved: {key}")
-        assignments = []
-        for item in result["assignments"]:
-            key = item["objection_id"]
-            if (
-                result["route"] != "gather"
-                or key not in dispositions
-                or dispositions[key]["outcome"] != "gather"
-            ):
-                warnings.append(f"dropped unrouteable or unknown objection assignment: {key}")
-                continue
-            assignments.append(item)
-        route = result["route"]
-        if route == "gather" and not assignments:
-            route = "report"
-            warnings.append("gathering closed because no actionable assignments remained")
-        for key, item in dispositions.items():
-            routed = (
-                (
-                    item["outcome"] == "gather"
-                    and route == "gather"
-                    and any(a["objection_id"] == key for a in assignments)
-                )
-                or (item["outcome"] == "reanalyze" and route == "reanalyze")
-                or item["outcome"] == "unresolved"
-            )
-            if not routed:
-                dispositions[key] = {
-                    "objection_id": key,
-                    "outcome": "unresolved",
-                    "reason": "no matching follow-up routed by orchestrator",
-                }
-                warnings.append(f"unrouted objection marked unresolved: {key}")
-        for warning in warnings:
+    def record_repairs(self, c: Control, task: Task, call_id: str, repairs: Repairs) -> None:
+        for path, rule in repairs.items:
             self.trace(
                 "validation",
                 task_id=task.task_id,
                 attempt_id=task.attempt_id,
                 call_id=call_id,
                 role=task.role,
-                outcome="warning",
-                warning=warning,
+                outcome="repaired",
+                field=path,
+                rule=rule,
             )
-        if warnings:
-            c.partial = True
-            c.stop_reason = "orchestrator decision repaired; unresolved objections retained"
-        return {
-            "route": route,
-            "assignments": assignments,
-            "dispositions": list(dispositions.values()),
-        }
-
-    def validate_result(self, c: Control, task: Task, result: dict) -> None:
-        self.check_refs(result, set(task.visible_refs))
-        if task.role == "orchestrator":
-            plan = Plan.model_validate(result)
-            if c.stage == "plan":
-                if (
-                    plan.route != "gather"
-                    or {a.role for a in plan.assignments} != {"observability", "dependency"}
-                    or plan.dispositions
-                    or any(a.objection_id for a in plan.assignments)
-                ):
-                    raise ValueError("initial plan must gather with both specialist roles")
-                if (plan.route == "gather") != bool(plan.assignments):
-                    raise ValueError("only gathering can carry assignments")
-        elif task.role == "reasoning":
-            if result["conclusion"] == "likely_cause" and (
-                not result["hypotheses"]
-                or not any(
-                    key in c.evidence for key in result["hypotheses"][0]["supporting_evidence"]
-                )
-            ):
-                raise ValueError(
-                    "likely_cause requires a top hypothesis supported by an observation"
-                )
-        elif task.role in {"critic", "reporting"}:
-            if result["revision_id"] != c.hypothesis_revision:
-                raise ValueError("wrong hypothesis revision")
-            if task.role == "critic":
-                hypotheses = c.tasks[c.hypothesis_revision].result["hypotheses"]
-                known = {h["hypothesis_id"] for h in hypotheses}
-                if any(
-                    o["hypothesis_id"] is not None and o["hypothesis_id"] not in known
-                    for o in result["objections"]
-                ):
-                    raise ValueError("unknown hypothesis in objection")
-            elif set(result["unresolved_objection_ids"]) != set(c.objections):
-                raise ValueError("report must include every unresolved objection")
+        task.repairs += len(repairs.items)
+        c.repairs[task.role] = c.repairs.get(task.role, 0) + len(repairs.items)
+        if repairs and task.phase != "settled":
+            # Multi-turn specialists learn from what the runtime had to normalize.
+            task.messages.append(
+                {
+                    "role": "user",
+                    "content": "Runtime repaired your last action: "
+                    + "; ".join(f"{path}: {rule}" for path, rule in repairs.items)[:2000],
+                }
+            )
 
     def fault_selection(self, c: Control, name: str, arguments: dict) -> FaultSelection:
         if name in self.faults:
             return self.faults[name]
         for rule in self.snapshot.fault_plan["rules"]:
-            if rule["tool"] != name or rule["service"] != arguments["service"]:
+            if rule["tool"] != name or rule["service"] != arguments.get("service"):
                 continue
             if rule.get("window_start"):
                 from datetime import datetime
@@ -447,16 +395,33 @@ class Investigation:
         *,
         retry: int = 0,
         retry_of: str | None = None,
+        query: str | None = None,
     ) -> None:
         total = sum(call.kind == kind for call in c.calls.values())
         cap = c.limits.max_model_calls if kind == "model" else c.limits.max_tool_calls
         count = task.model_calls if kind == "model" else task.tool_calls
         task_cap = c.limits.task_model_calls if kind == "model" else c.limits.task_tool_calls
-        if time.monotonic() >= self.deadline or total >= cap or count >= task_cap:
-            self.close(c, "resource_exhausted", f"{kind} call/task or wall time limit")
+        if time.monotonic() >= self.deadline or total >= cap:
+            self.close(c, "resource_exhausted", f"{kind} call or wall time limit")
+            return
+        if count >= task_cap:
+            # A task allowance settles only that task; its batch still reaches Reasoning.
+            task.status, task.phase = "failed", "settled"
+            task.failure = f"task {kind}-call allowance ({task_cap}) exhausted"
             return
         if kind == "model":
-            request = {**request, "remaining_model_calls_after_this": task_cap - count - 1}
+            tool_total = sum(call.kind == "tool" for call in c.calls.values())
+            request = {
+                **request,
+                "remaining_model_calls_after_this": task_cap - count - 1,
+                "remaining_tool_calls": max(
+                    0,
+                    min(
+                        c.limits.task_tool_calls - task.tool_calls,
+                        c.limits.max_tool_calls - tool_total,
+                    ),
+                ),
+            }
         call_id = identity()
         fault = (
             self.fault_selection(c, request["name"], request["arguments"])
@@ -472,6 +437,7 @@ class Investigation:
             request=json.loads(json.dumps(request)),
             retry=retry,
             retry_of=retry_of,
+            query=query,
             fault={
                 "outcome": fault.outcome,
                 "keep_first": fault.keep_first,
@@ -494,7 +460,13 @@ class Investigation:
         if receipt.get("error"):
             if call.retry < c.limits.call_retries and receipt.get("retryable", True):
                 self.admit(
-                    c, task, call.kind, call.request, retry=call.retry + 1, retry_of=call.call_id
+                    c,
+                    task,
+                    call.kind,
+                    call.request,
+                    retry=call.retry + 1,
+                    retry_of=call.call_id,
+                    query=call.query,
                 )
                 return
             if call.kind == "model":
@@ -512,9 +484,12 @@ class Investigation:
                 if (
                     page.source_status == "complete"
                     and not page.observations
+                    and page.summary is None
                     and page.query_key not in c.coverage
                 ):
                     c.coverage.append(page.query_key)
+                if page.source_status == "complete" and call.query:
+                    c.query_index.setdefault(call.query, call.call_id)
             # Retain full pages in raw receipts and canonical evidence, not twice in context.
             summary = (
                 {key: value for key, value in payload.items() if key != "observations"}
@@ -547,21 +522,49 @@ class Investigation:
             return
         action = receipt["payload"]
         task.messages.append({"role": "assistant", "content": json.dumps(action)})
+        repairs = Repairs()
         try:
-            parsed = self.adapters[task.role].validate_python(action)
-            data = parsed.model_dump(mode="json")
+            allowed = ALLOWED_TOOLS.get(task.role, set())
+            final_only = call.request.get("remaining_model_calls_after_this", 1) <= 0 or (
+                call.request.get("remaining_tool_calls", 1) <= 0
+            )
+            action = repair_action(task.role, action, allowed, repairs, final_only=final_only)
+            if action["kind"] == "final":
+                scope = self.scope(c, task)
+                if task.role == "orchestrator" and c.stage == "decide":
+                    try:
+                        decision = Plan.model_validate(action["result"]).model_dump()
+                    except ValidationError as exc:
+                        raise ValueError(describe_validation(exc, "action.result")) from exc
+                    action["result"], reopened = repair_decision(decision, scope, repairs)
+                    if reopened:
+                        c.partial = True
+                        c.stop_reason = (
+                            "orchestrator decision repaired; unresolved objections retained"
+                        )
+                else:
+                    action["result"] = repair_result(
+                        task.role, c.stage, action["result"], scope, repairs
+                    )
+            data = self.adapters[task.role].validate_python(action).model_dump(mode="json")
             if data["kind"] == "tools":
-                allowed = ALLOWED_TOOLS.get(task.role, set())
-                for request in data["requests"]:
-                    if request["name"] not in allowed:
-                        raise ValueError("role is not allowed this tool")
-                    QUERY_MODELS[request["name"]].model_validate(request["arguments"])
-                task.requests = data["requests"]
+                requests = []
+                for index, request in enumerate(data["requests"]):
+                    try:
+                        query_identity(self.snapshot, request["name"], request["arguments"])
+                    except ValueError as exc:
+                        repairs.add(
+                            f"action.requests[{index}].arguments", f"request dropped: {exc}"
+                        )
+                        continue
+                    requests.append(request)
+                if not requests:
+                    raise ValueError(
+                        "; ".join(f"{path}: {rule}" for path, rule in repairs.items[-5:])
+                    )
+                task.requests = requests
                 task.phase = "tools"
             else:
-                if task.role == "orchestrator" and c.stage == "decide":
-                    data["result"] = self.repair_decision(c, task, data["result"], call.call_id)
-                self.validate_result(c, task, data["result"])
                 # Model IDs are labels only; authoritative identities are runtime allocated.
                 field = {
                     "reasoning": ("hypotheses", "hypothesis_id"),
@@ -572,6 +575,7 @@ class Investigation:
                         item["model_label"] = item[field[1]]
                         item[field[1]] = identity()
                 task.result, task.status, task.phase = data["result"], "succeeded", "settled"
+            self.record_repairs(c, task, call.call_id, repairs)
             self.trace(
                 "validation",
                 task_id=task.task_id,
@@ -581,6 +585,9 @@ class Investigation:
                 outcome="accepted",
             )
         except (ValueError, ValidationError) as exc:
+            error = (
+                describe_validation(exc, "action") if isinstance(exc, ValidationError) else str(exc)
+            )[:1000]
             self.trace(
                 "validation",
                 task_id=task.task_id,
@@ -588,19 +595,23 @@ class Investigation:
                 call_id=call.call_id,
                 role=task.role,
                 outcome="rejected",
-                error=str(exc)[:1000],
+                error=error,
             )
-            if task.corrections == 0:
+            allowance = task.model_calls < c.limits.task_model_calls
+            if task.corrections == 0 and allowance:
                 task.corrections += 1
                 task.phase = "model"
                 task.messages.append(
-                    {"role": "user", "content": f"Correct this invalid action once: {exc}"}
+                    {
+                        "role": "user",
+                        "content": f"Correct this invalid action once. Field and rule: {error}",
+                    }
                 )
             else:
                 task.status, task.phase, task.failure = (
                     "failed",
                     "settled",
-                    f"invalid output: {exc}",
+                    f"invalid output: {error}",
                 )
 
     def report(self, c: Control, partial_reason: str | None = None) -> None:
@@ -695,6 +706,59 @@ class Investigation:
         elif c.stage == "reporting":
             c.status = "completed"
 
+    def dispatch_tools(self, c: Control, task: Task) -> None:
+        """Admit new queries; answer identical normalized queries from earlier receipts."""
+        requests, task.requests = task.requests, []
+        seen: set[str] = set()
+        notes = []
+        for request in requests:
+            key = query_identity(self.snapshot, request["name"], request["arguments"])
+            if key in seen:
+                notes.append(f"{request['name']}: repeated within one action; skipped")
+                continue
+            seen.add(key)
+            if key in c.query_index:
+                self.replay(c, task, c.query_index[key], request)
+                continue
+            if task.tool_calls >= c.limits.task_tool_calls:
+                notes.append(f"{request['name']}: task tool-call allowance exhausted; not run")
+                continue
+            self.admit(c, task, "tool", request, query=key)
+            if c.status != "running":
+                return
+        if notes:
+            task.messages.append({"role": "user", "content": "Runtime note: " + "; ".join(notes)})
+        if not task.pending:
+            task.phase = "model"
+
+    def replay(self, c: Control, task: Task, receipt_id: str, request: dict) -> None:
+        """Duplicate query: return the earlier receipt's IDs and summary, charge no tool call."""
+        receipt = c.tool_receipts[receipt_id]
+        ids = receipt["page"]["observation_ids"]
+        message = {
+            "tool_receipt_id": receipt_id,
+            "duplicate_query": True,
+            "charged_tool_call": False,
+            "note": "Identical normalized query already answered; ask a different question "
+            "or return your final result.",
+            **receipt,
+        }
+        if receipt_id not in task.visible_refs:
+            # Another task retrieved it; this task has not seen the records yet.
+            message["observations"] = [c.evidence[key] for key in ids]
+            task.visible_refs.extend([receipt_id, *(k for k in ids if k not in task.visible_refs)])
+        task.messages.append({"role": "user", "content": json.dumps(message)})
+        c.deduplicated[task.role] = c.deduplicated.get(task.role, 0) + 1
+        self.trace(
+            "tool_dedupe",
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+            role=task.role,
+            outcome="answered_from_receipt",
+            receipt_id=receipt_id,
+            tool=request["name"],
+        )
+
     async def controller(self, state: GraphState) -> dict:
         c = Control.model_validate(state["control"])
         c.dispatch = []
@@ -706,7 +770,11 @@ class Investigation:
                 self.accept(c, c.calls[call_id], receipt)
         if c.status == "running" and time.monotonic() >= self.deadline:
             self.close(c, "resource_exhausted", "wall time limit")
-        if c.status == "running":
+        # A task can settle at admission (allowance spent) with nothing dispatched; advance
+        # again so the graph never stops while running. Each pass settles or dispatches work.
+        for _ in range(8):
+            if c.status != "running":
+                break
             if c.stage == "start":
                 c.stage = "plan"
                 c.batch = [
@@ -724,14 +792,12 @@ class Investigation:
                 task = c.tasks[task_id]
                 if task.status != "running" or task.pending:
                     continue
-                if task.phase == "model":
+                if task.phase == "tools":
+                    self.dispatch_tools(c, task)
+                if task.phase == "model" and task.status == "running" and not task.pending:
                     self.admit(c, task, "model", {"messages": task.messages})
-                elif task.phase == "tools":
-                    requests, task.requests = task.requests, []
-                    for request in requests:
-                        self.admit(c, task, "tool", request)
-                        if c.status != "running":
-                            break
+            if c.dispatch:
+                break
         if c.status != "running":
             c.dispatch = []
         c.revision += 1
@@ -756,10 +822,10 @@ class Investigation:
                     )
                     async with asyncio.timeout(timeout):
                         if call.kind == "model":
+                            remaining = call.request.get("remaining_model_calls_after_this", 1)
+                            tools_left = call.request.get("remaining_tool_calls", 1)
                             schema = provider_schema(
-                                call.role,
-                                allow_tools=call.request.get("remaining_model_calls_after_this", 1)
-                                > 0,
+                                call.role, allow_tools=remaining > 0 and tools_left > 0
                             )
                             messages = [
                                 *call.request["messages"],
@@ -771,8 +837,9 @@ class Investigation:
                                         "the real registry tool results. Read them and advance the investigation; "
                                         "do not repeat a completed query without a new evidence question. "
                                         "Return final findings once you have enough evidence, including gaps. "
-                                        f"Remaining task model calls after this response: {call.request.get('remaining_model_calls_after_this', 'unknown')}. "
-                                        "If none remain, return a final result now, not more tools."
+                                        f"Budget: {remaining} task model calls remain after this "
+                                        f"response; {tools_left} tool calls remain. "
+                                        "If either is 0, return a final result now, not more tools."
                                     ),
                                 },
                             ]

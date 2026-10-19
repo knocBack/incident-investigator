@@ -26,6 +26,15 @@ class Limits(Record):
     max_no_progress_rounds: int = Field(default=2, ge=1, le=2)
 
 
+# Run profiles own every execution bound, including per-call and wall timeouts.
+PROFILES = {
+    "demo": Limits(),
+    # Live providers via OpenRouter/Codex take 15-35 s per call; the wall fits one full
+    # review round (plan, eight specialist turns, reasoning, critic, decide, report) at 90 s.
+    "demo-live": Limits(call_seconds=90, wall_seconds=1200, task_model_calls=8),
+}
+
+
 class Assignment(Record):
     role: Specialist
     question: str = Field(min_length=1, max_length=2000)
@@ -118,7 +127,17 @@ class Report(Record):
 
 
 class ToolRequest(Record):
-    name: Literal["logs", "metrics", "changes", "dependencies", "history"]
+    name: Literal[
+        "catalog",
+        "logs",
+        "log_counts",
+        "trace_logs",
+        "metrics",
+        "metric_stats",
+        "changes",
+        "dependencies",
+        "history",
+    ]
     arguments: dict[str, JsonValue]
 
 
@@ -149,6 +168,15 @@ PAYLOADS = {
     "reporting": Report,
 }
 ALLOWED_TOOLS = {
-    "observability": {"logs", "metrics", "history"},
-    "dependency": {"dependencies", "changes", "history"},
+    "observability": {
+        "catalog",
+        "logs",
+        "log_counts",
+        "trace_logs",
+        "metrics",
+        "metric_stats",
+        "history",
+    },
+    # Dependency follows the call path, so it can check downstream health in aggregate.
+    "dependency": {"catalog", "dependencies", "changes", "history", "log_counts", "metric_stats"},
 }

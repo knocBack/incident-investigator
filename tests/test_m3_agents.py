@@ -361,9 +361,9 @@ def test_provider_schemas_keep_tool_arguments_and_root_references():
 
         check(schema)
     specialist = provider_schema("observability")
-    assert {"LogsQuery", "MetricsQuery", "HistoryQuery"} <= set(specialist["$defs"])
+    assert {"LogsQuery", "MetricsQuery", "HistoryQuery", "CatalogQuery"} <= set(specialist["$defs"])
     assert (
-        len(specialist["$defs"]["ProviderTools"]["properties"]["requests"]["items"]["anyOf"]) == 3
+        len(specialist["$defs"]["ProviderTools"]["properties"]["requests"]["items"]["anyOf"]) == 7
     )
 
 
@@ -429,7 +429,7 @@ async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
     assert next(iter(result["state"]["dispositions"].values()))["outcome"] == "unresolved"
 
 
-async def test_missing_reference_id_gets_one_correction_without_controller_crash(tmp_path):
+async def test_reference_missing_id_is_dropped_and_claim_kept(tmp_path):
     class MalformedOutput(Scenario):
         injected = False
 
@@ -441,6 +441,8 @@ async def test_missing_reference_id_gets_one_correction_without_controller_crash
                 and response.action["kind"] == "final"
                 and not self.injected
             ):
+                finding = response.action["result"]["findings"][0]
+                finding["references"].append({"kind": "observation"})
                 response.action["result"]["outputs"] = {"kind": "observation"}
                 self.injected = True
             return response
@@ -452,16 +454,15 @@ async def test_missing_reference_id_gets_one_correction_without_controller_crash
     assert result["status"] == "completed"
     task = next(t for t in result["state"]["tasks"].values() if t["role"] == "observability")
     assert task["status"] == "succeeded"
-    assert task["corrections"] == 1
-    assert task["result"]["outputs"] == {}
+    assert task["corrections"] == 0
+    # Scalar outputs are data, not references; the valid citation keeps the claim.
+    assert task["result"]["outputs"] == {"kind": "observation"}
+    assert task["result"]["findings"][0]["references"]
     events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
-    rejections = [
-        event
-        for event in events
-        if event["event"] == "validation" and event["outcome"] == "rejected"
-    ]
-    assert len(rejections) == 1
-    assert rejections[0]["error"] == "unknown or invisible evidence reference"
+    assert not any(e["event"] == "validation" and e["outcome"] == "rejected" for e in events)
+    repaired = [e for e in events if e["event"] == "validation" and e["outcome"] == "repaired"]
+    assert [e["field"] for e in repaired] == ["action.result.findings[0].references[2].id"]
+    assert result["repairs"]["observability"] == 1
 
 
 async def test_review_round_limit_reports_and_orchestrator_sees_budget(tmp_path):
@@ -595,11 +596,15 @@ async def test_likely_cause_requires_supporting_observation(tmp_path, support):
     )
     result = read_result(directory)
     assert result["status"] == "completed"
-    assert result["completeness"] == "partial"
     assert result["state"]["tasks"][result["state"]["report_task"]]["status"] == "succeeded"
     task = next(t for t in result["state"]["tasks"].values() if t["role"] == "reasoning")
-    assert task["corrections"] == 1
-    assert "supported by an observation" in task["failure"]
+    assert task["status"] == "succeeded" and task["corrections"] == 0
+    # An unsupported cause claim is downgraded, never accepted as likely_cause.
+    assert result["diagnosis"] == "inconclusive"
+    events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    assert any(
+        e["outcome"] == "repaired" and e["field"] == "action.result.conclusion" for e in events
+    )
 
 
 async def test_report_evidence_counts_and_empty_sections(tmp_path):
@@ -635,6 +640,7 @@ def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, e
     from incident_investigator import cli
 
     async def bounded_investigate(snapshot, model, out, **kwargs):
+        kwargs.pop("limits")
         limits = Limits(max_model_calls=1) if expected_status == "resource_exhausted" else Limits()
         return await investigate(snapshot, model, out, limits=limits, **kwargs)
 
@@ -738,11 +744,11 @@ async def test_live_demo_2_decisions_are_repaired_into_reports(tmp_path, decisio
     decisions = [t for t in result["state"]["tasks"].values() if t["role"] == "orchestrator"]
     assert all(t["status"] == "succeeded" and t["corrections"] == 0 for t in decisions)
     events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
-    assert any(e["event"] == "validation" and e["outcome"] == "warning" for e in events)
+    assert any(e["event"] == "validation" and e["outcome"] == "repaired" for e in events)
     assert not any(e["event"] == "validation" and e["outcome"] == "rejected" for e in events)
 
 
-async def test_duplicate_and_unknown_decision_references_warn_without_correction(tmp_path):
+async def test_duplicate_and_unknown_decision_references_repair_without_correction(tmp_path):
     class DuplicateDecision(Scenario):
         async def complete(self, messages, schema):
             context = json.loads(messages[1]["content"])
@@ -771,8 +777,12 @@ async def test_duplicate_and_unknown_decision_references_warn_without_correction
     assert len(result["state"]["dispositions"]) == 1
     assert "unknown" not in result["state"]["dispositions"]
     events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
-    warnings = [e for e in events if e["event"] == "validation" and e["outcome"] == "warning"]
-    assert len(warnings) == 2
+    repaired = [e for e in events if e["event"] == "validation" and e["outcome"] == "repaired"]
+    assert [e["field"] for e in repaired] == [
+        "action.result.dispositions[1].objection_id",
+        "action.result.dispositions[2].objection_id",
+    ]
+    assert result["repairs"]["orchestrator"] == 2
 
 
 @pytest.mark.parametrize("failed_role", ["orchestrator", "critic", "reasoning", "decide"])

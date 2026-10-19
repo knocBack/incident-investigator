@@ -11,7 +11,9 @@ uv run python -m incident_investigator.tools
 ```
 
 The command loads frozen `dev-00` and prints one JSON page from each retrieval
-source. It does not access the live lab or produce a diagnosis.
+source. It does not access the live lab or produce a diagnosis. Agents also have
+`catalog` (what names/templates/keys exist), `log_counts`, `metric_stats` and
+`trace_logs`; see [tool contracts §9](docs/tool-contracts.md#9-real-world-data-access-extension-m3-quality).
 
 ## Run the lab
 
@@ -109,13 +111,17 @@ entry advertises structured outputs. The adapter fetches and caches the public
 catalogue per run, uses strict `response_format: json_schema` for supporting models,
 and uses JSON mode plus the same runtime validation/correction for other models.
 Provider parameter support is required and provider fallback is disabled. Each
-request has a hard 30-second timeout and a 4096-token output bound. Models with a
+request has a hard per-call timeout from the run profile (`demo-live`: 90 seconds for
+OpenRouter and Codex) and a 4096-token output bound. A model whose provider rejects the
+strict schema with HTTP 400 switches to JSON mode for the rest of the run. Models with a
 reasoning switch have it disabled only when the catalogue explicitly marks reasoning
 as optional (`reasoning.mandatory: false`); otherwise provider defaults apply.
 There are no hidden HTTP retries;
 the runtime retries eligible call failures once. Specialists see their remaining
-model-call allowance; their last permitted response schema allows a final result
+model- and tool-call allowance; their last permitted response schema allows a final result
 only, so they can summarize retrieved evidence rather than request another query.
+Identical repeated queries are answered from the earlier receipt without a tool call.
+Harmless output deviations are repaired and counted per role (`repairs` in `result.json`).
 Authentication/credit failures
 (401/402) are nonretryable; rate limits (429) include the provider message and are
 retryable within the same limits. Free-model rate limits can prevent a run.

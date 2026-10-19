@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 
+from incident_investigator.contracts import PROFILES, Limits
 from incident_investigator.lab.__main__ import snapshot
 from incident_investigator.lab.app import JsonlTelemetrySink, create_app
 from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
@@ -18,11 +19,16 @@ from incident_investigator.runtime import investigate
 from incident_investigator.sources.loader import load_snapshot
 
 
+def profile(args) -> Limits:
+    """Live providers get the demo-live profile; its per-call timeout also bounds adapters."""
+    return PROFILES["demo-live" if args.model in {"openrouter", "codex"} else "demo"]
+
+
 def model(args):
     if args.model == "openrouter":
-        return OpenRouterModel()
+        return OpenRouterModel(timeout_seconds=profile(args).call_seconds)
     if args.model == "codex":
-        return CodexExecModel()
+        return CodexExecModel(timeout_seconds=profile(args).call_seconds)
     actions = json.loads(args.script.read_text()) if args.script else []
     return ScriptedModel(actions)
 
@@ -32,20 +38,26 @@ async def demo(args) -> Path:
     with tempfile.TemporaryDirectory(prefix="ii-demo-") as directory:
         root = Path(directory)
         telemetry = root / "telemetry.jsonl"
-        app = create_app(telemetry_sink=JsonlTelemetrySink(telemetry))
+        # A simulated clock spaces baseline, fault and failing load seconds apart (ending
+        # before now), so before/after comparisons and change times are meaningful.
+        moment = [datetime.now(UTC) - timedelta(seconds=40)]
+        app = create_app(clock=lambda: moment[0], telemetry_sink=JsonlTelemetrySink(telemetry))
         # M1 metrics cover ten-second windows; include the whole baseline window.
-        start = datetime.now(UTC) - timedelta(seconds=11)
+        start = moment[0] - timedelta(seconds=11)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://lab"
             ) as client:
                 for _ in range(3):
+                    moment[0] += timedelta(seconds=2)
                     await client.post("/checkout")
+                moment[0] += timedelta(seconds=5)
                 response = await client.post("/admin/faults", json={"family": args.fault})
                 response.raise_for_status()
                 for _ in range(5):
+                    moment[0] += timedelta(seconds=2)
                     await client.post("/checkout")
-            cutoff = datetime.now(UTC)
+            cutoff = moment[0]
             source_root = root / "case"
             snapshot(
                 argparse.Namespace(
@@ -59,7 +71,7 @@ async def demo(args) -> Path:
                 )
             )
             directory = await investigate(
-                load_snapshot("lab-demo", source_root), model(args), args.out
+                load_snapshot("lab-demo", source_root), model(args), args.out, limits=profile(args)
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -76,7 +88,10 @@ async def run(args) -> int:
         roots = args.source or Path("fixtures/dev-00")
         snapshots = [load_snapshot(case, roots) for case in args.case]
         runs = await asyncio.gather(
-            *[investigate(case, model(args), args.out, semaphore=semaphore) for case in snapshots]
+            *[
+                investigate(case, model(args), args.out, semaphore=semaphore, limits=profile(args))
+                for case in snapshots
+            ]
         )
     failed = False
     for directory in runs:
