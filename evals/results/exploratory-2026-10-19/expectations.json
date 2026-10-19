@@ -1,0 +1,52 @@
+[
+  {
+    "run": "live-demo/e6c8a476-7422-4cff-ad74-f9fc83b34254",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "live-demo-2/6241d34e-f47c-4055-9bcd-2c6e3c810f1d",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "live-demo-3/6ec11489-3747-45ad-9e1d-0b3abd775aa2",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "openrouter-live-1/60151a9e-15db-4788-95b7-e43561718433",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "openrouter-live-2/3142a9ea-7768-4985-95b4-40a16d378f2b",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "openrouter-live-3/8ba42721-882c-4445-b65b-e7fe01892a0a",
+    "family": "bad_configuration",
+    "basis": "dev-style demo default; no contrary fault identified"
+  },
+  {
+    "run": "paid-runs/04edfc8f-f989-4b93-9b3d-1f8779ec80b6",
+    "family": "bad_configuration",
+    "basis": "paid batch runs.json"
+  },
+  {
+    "run": "paid-runs/1f96ab93-906e-4d57-8e7a-b31bd0d80aa2",
+    "family": "database_contention",
+    "basis": "paid batch runs.json"
+  },
+  {
+    "run": "paid-runs/bf6ce13b-90f3-4237-af6a-a56eda7f477c",
+    "family": "traffic_overload",
+    "basis": "paid batch runs.json"
+  },
+  {
+    "run": "paid-runs/e01f9051-6c32-48df-8ca5-8dc7969bcfc8",
+    "family": "deployment_regression",
+    "basis": "paid batch runs.json"
+  }
+]

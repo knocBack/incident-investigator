@@ -8,7 +8,7 @@ Use **Ports & Adapters**: five typed retrieval functions behind a small registry
 
 Use Pydantic models for request/result validation and generated JSON schemas. Reuse native typed-tool wrappers (`langchain_core.tools.StructuredTool`) for callable/schema integration, LangGraph `Send` and its SQLite checkpointer for graph dispatch/persistence, and `asyncio.timeout`/`Semaphore` for bounded waits/capacity. Keep one admitted external operation per call node as LLD-01 requires. A shared **Decorator-style async wrapper** applies the runtime's already-selected fault around a retrieval function; it never owns counters or commits state.
 
-Use a dictionary from the five tool names to their definitions. Do not introduce a generic query language, custom tool framework, backend Strategy hierarchy, ORM, or another scheduler. There is one source implementation; narrow functions suffice. Native wrappers do not replace our invocation guards, provenance checks, or durable admission/acceptance rules.
+Use a dictionary from the tool names (the five source tools plus the §9 discovery, aggregation and correlation tools) to their definitions. Do not introduce a generic query language, custom tool framework, backend Strategy hierarchy, ORM, or another scheduler. There is one source implementation; narrow functions suffice. Native wrappers do not replace our invocation guards, provenance checks, or durable admission/acceptance rules.
 
 Logical interfaces:
 
@@ -169,3 +169,38 @@ Save this decision checkpoint before extending the evaluation specification thro
 | [Python asyncio timeout](https://docs.python.org/3.13/library/asyncio-task.html#asyncio.timeout) and [pytest temporary paths](https://docs.pytest.org/en/stable/how-to/tmp_path.html): bounded async execution and isolated test artifacts have established primitives. | Reuse them for timed faults and per-test SQLite/source directories. Observe timeout/cancellation outcomes and run isolation against the real implementation. |
 
 LLD-02 checkpoint verification, before the documentation reconciliation: inline JSON checks confirmed the saved profile's fields, selected values, and finite bound relationships; no application loader exists yet. Document checks passed across seven documents and 61 local links/anchors. The incident definitions, comparison/grading policy, and all 12 earlier skill/HTML/transcript files were unchanged at that checkpoint. Executable coverage and the dependency failure are recorded in the [evaluation checkpoint](evaluation-plan.md#lld-02-checkpoint-coverage--2026-10-19); no source/runtime/diagnostic pass is claimed.
+
+## 9. Real-world data access extension (M3 quality)
+
+Accepted on 2026-10-19 after paid demo runs showed agents guessing metric names and missing
+WARN logs because they could not see what data existed. This section extends §1 and §3 and
+supersedes them where they conflict. The five record tools keep their contracts; four tools
+are added, so the registry has nine names. Every tool still returns observations or derived
+counts, never a diagnosis, and agents still never query the live lab.
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `catalog` | nullable `service` | `summary` of everything available up to the cutoff: services; metric names with unit, aggregations, window sizes, sample count and first/last event; log severity counts, top message templates (numbers/hex IDs collapsed to `<n>`) with counts and attribute keys, operations, versions; change kind, version, config keys and description; latest dependency targets; earlier incident IDs/titles; the valid enum values. |
+| `log_counts` | nullable `service`, `start`, `end`, `severity`, `text_contains`; `group_by` ⊆ service/severity/template/operation/version (default service, severity, template); nullable `attribute` (group by that attribute's value, e.g. `status`); nullable `bucket_seconds` | `summary.groups` of `{key, bucket_start, count, first_event, last_event, exemplar_evidence_id}` (at most 100 groups, highest severity/count kept), plus one exemplar record per group key as citable observations (at most 20, highest severity first). |
+| `metric_stats` | nullable `service`, `start`, `end`, `metric_name`, `window_seconds`, `split_at` | `summary.series` per (service, name, unit, aggregation, window): count, min, max, mean, last, first value/time, last event, and `before_split`/`after_split` statistics around `split_at`; the peak sample per series is attached as a citable observation. |
+| `trace_logs` | `trace_id` and/or `request_id` (one required), nullable `start`, `end`, `limit`, `cursor` | Every log row with that correlation ID across all services, paged like `logs`. |
+
+`ToolPage` gains nullable `summary` for derived results. Derived pages are complete, have no
+cursor, report the number of scanned records as `available_match_count`, and stay within the
+page byte bound by detaching exemplars (their IDs become null) or failing with a structured
+error asking for a narrower query. Aggregates are derived on demand from recorded samples;
+they never rewrite or interpolate stored measurements. A derived page does not establish
+complete-empty coverage. Tool descriptions list the valid service, severity, change-kind and
+aggregation values.
+
+Defaults: `log_counts`, `metric_stats` and `trace_logs`, like `history`, have no lower time
+bound by default, so baselines before the alert window are visible. Every source interval is
+half-open except at the cutoff: a record whose event time equals the cutoff is included, so
+every record available by the cutoff is retrievable through pagination (tested by paging every
+source of `dev-00` and a lab snapshot).
+
+Query dedupe: the runtime normalizes each request with the same `query_key` plus its
+limit/cursor. A request identical to one already answered by a complete page in this run is
+not dispatched and charges no tool call; the task receives the earlier receipt's ID, page
+summary and evidence IDs (with the records when that task had not yet seen them). Failed and
+partial pages are not reused, so retries and further evidence requests stay possible.

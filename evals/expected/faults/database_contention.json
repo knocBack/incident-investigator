@@ -1,0 +1,27 @@
+{
+  "version": "lab.v1",
+  "family": "database_contention",
+  "culprit_service": "database",
+  "mechanism_keywords": [
+    "lock|blocking|contention"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "database",
+      "predicates": {
+        "body": {
+          "regex": "lock wait"
+        },
+        "attributes.lock_wait_ms": {
+          "gte": 200
+        }
+      }
+    }
+  ],
+  "wrong_alternatives": [
+    "deployment regression",
+    "connection leak"
+  ],
+  "precision": "Local lab fault signature only; no unsupported deeper causal precision."
+}

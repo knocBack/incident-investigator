@@ -1,0 +1,40 @@
+{
+  "version": "lab.v1",
+  "family": "bad_configuration",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "deadline|timeout",
+    "50|reduc|config"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "configured deadline"
+        },
+        "attributes.db_timeout_ms": {
+          "eq": 50
+        }
+      }
+    },
+    {
+      "source": "changes",
+      "service": "inventory",
+      "predicates": {
+        "changes": {
+          "contains": {
+            "key": "db_timeout_ms",
+            "after": 50
+          }
+        }
+      }
+    }
+  ],
+  "wrong_alternatives": [
+    "database contention",
+    "connection leak"
+  ],
+  "precision": "Local lab fault signature only; no unsupported deeper causal precision."
+}

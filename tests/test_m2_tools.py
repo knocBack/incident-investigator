@@ -55,3 +55,62 @@ async def test_scripted_model_and_codex_command(tmp_path: Path) -> None:
 def test_live_codex_structured_call() -> None:
     result = asyncio.run(CodexExecModel(timeout_seconds=30).complete([], {"type": "object"}))
     assert isinstance(result.action, dict)
+
+
+async def test_metrics_dev00_is_nonempty() -> None:
+    from incident_investigator.tools import metrics
+
+    page = await metrics(snapshot(), service="inventory")
+    assert page.source_status == "complete"
+    assert page.observations
+
+
+def test_timestamp_invalid_types_are_validation_errors() -> None:
+    from pydantic import ValidationError
+
+    from incident_investigator.tools.contracts import LogsQuery
+
+    for value in ({}, [], object()):
+        with pytest.raises(ValidationError):
+            LogsQuery(service="checkout", start=value)
+
+
+def test_codex_thread_id_comes_from_thread_started() -> None:
+    from incident_investigator.models.adapter import _events
+
+    usage, run_id = _events(
+        '{"type":"thread.started","thread_id":"thread-1"}\n'
+        '{"type":"item.completed","id":"item-1"}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":3}}'
+    )
+    assert run_id == "thread-1"
+    assert usage.input_tokens == 12 and usage.output_tokens == 3
+
+
+async def test_codex_cancellation_kills_and_reaps_child(tmp_path, monkeypatch) -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    started = asyncio.Event()
+
+    async def communicate(_):
+        started.set()
+        await asyncio.Event().wait()
+
+    process = Mock(returncode=None, communicate=communicate, wait=AsyncMock())
+    monkeypatch.setattr("shutil.which", lambda _: "/codex")
+    monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+    task = asyncio.create_task(CodexExecModel().complete([], {}))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    process.kill.assert_called_once()
+    process.wait.assert_awaited_once()
+
+
+async def test_codex_unavailable_hint_matches_cli_selection(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    with pytest.raises(RuntimeError, match="--model scripted --script"):
+        await CodexExecModel().complete([], {})
+    command = CodexExecModel().build_command(Path("/tmp"), Path("/schema"), Path("/out"))
+    assert command[command.index("view_image") - 1] == "--disable"

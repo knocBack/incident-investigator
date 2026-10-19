@@ -1,0 +1,28 @@
+{
+  "version": "lab.v1",
+  "family": "resource_exhaustion",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "connection|pool",
+    "exhaust|limit|leak"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "pool exhausted"
+        },
+        "attributes.pool_in_use": {
+          "gte": 10
+        }
+      }
+    }
+  ],
+  "wrong_alternatives": [
+    "database contention",
+    "traffic overload"
+  ],
+  "precision": "Local lab fault signature only; no unsupported deeper causal precision."
+}

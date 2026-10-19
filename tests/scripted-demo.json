@@ -1,0 +1,10 @@
+[
+  {"kind":"final","result":{"route":"gather","assignments":[{"role":"observability","question":"Check inventory logs and metrics","objection_id":null},{"role":"dependency","question":"Check dependency path and inventory changes","objection_id":null}],"dispositions":[]}},
+  {"kind":"tools","requests":[{"name":"logs","arguments":{"service":"inventory"}},{"name":"metrics","arguments":{"service":"inventory"}}]},
+  {"kind":"tools","requests":[{"name":"dependencies","arguments":{"service":"checkout"}},{"name":"changes","arguments":{"service":"inventory"}},{"name":"history","arguments":{"service":"inventory"}}]},
+  {"kind":"final","result":{"findings":[],"gaps":["Scripted demonstration does not interpret the retrieved observations"],"outputs":{}}},
+  {"kind":"final","result":{"findings":[],"gaps":[],"outputs":{}}},
+  {"kind":"final","result":{"hypotheses":[],"conclusion":"inconclusive","explanation":"This replay demonstrates coordination and retrieval, not a diagnostic model"}},
+  {"kind":"final","result":{"revision_id":"{{context.hypothesis_revision}}","objections":[],"summary":"No diagnosis was asserted by this scripted replay"}},
+  {"kind":"final","result":{"revision_id":"{{context.hypothesis_revision}}","summary":"The scripted replay gathered observations. Review result.json to inspect the evidence. A real model is required for diagnosis.","facts":[],"assumptions":[],"recommendations":[],"unresolved_objection_ids":[]}}
+]

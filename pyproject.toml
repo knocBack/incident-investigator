@@ -19,6 +19,9 @@ dependencies = [
   "uvicorn",
 ]
 
+[project.scripts]
+incident-investigator = "incident_investigator.cli:main"
+
 [dependency-groups]
 dev = [
   "pre-commit",
@@ -30,7 +33,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["live: opt-in test that calls a local model provider"]
+markers = ["live: opt-in test that calls a model provider"]
 
 [tool.ruff]
 line-length = 100
