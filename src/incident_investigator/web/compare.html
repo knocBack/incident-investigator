@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block content %}
+    <h1>Compare outcomes and work</h1>
+    <form class="filters">
+        <label>
+            Compare<select name="kind" data-autosubmit>
+            <option {% if kind == 'runs' %}selected{% endif %}>runs</option>
+            <option {% if kind == 'suites' %}selected{% endif %}>suites</option>
+            </select>
+        </label>
+        {% for side in ['left','right'] %}
+            <label>
+                {{ side|title }}<select name="{{ side }}">
+                <option value="">Select</option>
+                {% for option in options %}
+                    <option value="{{ option.id }}"
+                            {% if (left if side == 'left' else right) == option.id %}selected{% endif %}>{{ option.get('fault',option.get('name')) }} · {{ option.get('graph', 'suite') }} · {{ option.id[:8] }}</option>
+                {% endfor %}
+                </select>
+            </label>
+        {% endfor %}
+        <button class="button">Compare</button>
+    </form>
+    <div class="card">
+        <div class="compare-metric header">
+            <span>Metric</span>
+            <span>Left</span>
+            <span>Right</span>
+        </div>
+        {% for field in fields %}
+            <div class="compare-metric">
+                <span>{{ field }}</span>
+                {% for value in values %}
+                    <span>{{ m.value(value.get(field) if value else none) }}</span>
+                {% endfor %}
+            </div>
+        {% endfor %}
+    </div>
+    <p class="page-note">Unknown cost is never zero. Compare recorded conditions before interpreting differences. Small exploratory samples do not establish graph or model superiority.</p>
+{% endblock %}

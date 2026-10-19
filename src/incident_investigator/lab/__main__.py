@@ -15,6 +15,7 @@ import uvicorn
 from incident_investigator.lab.app import JsonlTelemetrySink, create_app
 from incident_investigator.lab.load import generate_load
 from incident_investigator.telemetry.models import SourceObservation, dataset_digest
+from incident_investigator.workspace import home
 
 
 def _utc(value: str) -> datetime:
@@ -34,7 +35,9 @@ def snapshot(args: argparse.Namespace) -> None:
     selected = [item for item in observations if item.available_at <= cutoff]
     if not selected:
         print("warning: snapshot contains no observations at or before the cutoff", file=sys.stderr)
-    out = Path(args.out)
+    out = Path(args.out) if args.out is not None else home() / "lab" / args.case
+    if not args.case or Path(args.case).name != args.case or args.case in {".", ".."}:
+        raise ValueError("case must be a directory name")
     out.mkdir(parents=True, exist_ok=True)
     alert = {
         "case_id": args.case,
@@ -72,7 +75,7 @@ def main() -> None:
     serve = sub.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--telemetry", type=Path, default=Path("telemetry.jsonl"))
+    serve.add_argument("--telemetry", type=Path, default=home() / "lab" / "telemetry.jsonl")
     load = sub.add_parser("load")
     load.add_argument("--target", default="http://127.0.0.1:8000")
     load.add_argument("--rps", type=float, required=True)
@@ -88,8 +91,8 @@ def main() -> None:
     freeze.add_argument("--start", type=_utc, default=datetime(2026, 1, 1, tzinfo=UTC))
     freeze.add_argument("--service", choices=["checkout", "inventory", "database"], required=True)
     freeze.add_argument("--symptoms", nargs="+", required=True)
-    freeze.add_argument("--out", type=Path, required=True)
-    freeze.add_argument("--telemetry", type=Path, default=Path("telemetry.jsonl"))
+    freeze.add_argument("--out", type=Path)
+    freeze.add_argument("--telemetry", type=Path, default=home() / "lab" / "telemetry.jsonl")
     args = parser.parse_args()
     if args.command == "serve":
         uvicorn.run(

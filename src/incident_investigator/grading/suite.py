@@ -15,9 +15,11 @@ from uuid import uuid4
 
 import httpx
 
+from incident_investigator.contracts import PROFILES
 from incident_investigator.grading.budget import BoundedModel, SpendGuard, amount, price_bound
 from incident_investigator.grading.grader import FAMILIES, expectation, grade_run, measured_sum
 from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument, recorded_graph
+from incident_investigator.workspace import batch_output
 
 
 def save(path, value):
@@ -162,7 +164,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
         "budget_usd": args.budget_usd,
         "max_input_tokens": max_input_tokens,
         "run_order": "model, repeat, fault",
-        "settings": "runtime defaults; one selected model for all roles",
+        "settings": "one selected model for all roles",
+        "limits_profile": getattr(args, "limits_profile", None)
+        or ("demo-live" if args.model == "openrouter" else "demo"),
         "prompt_hashes": {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
             for p in (Path(__file__).parents[1] / "prompts").glob("*.md")
@@ -233,6 +237,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                         adapter = BoundedModel(
                             adapter, catalog, guard, max_input_tokens=max_input_tokens
                         )
+                    print(f"Starting {fault} | model {model_id} | repeat {repeat + 1}", flush=True)
                     started = time.monotonic()
                     try:
                         directory = await (demo_fn or cli.demo)(
@@ -243,6 +248,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                 fault=fault,
                                 _model_adapter=adapter,
                                 graph=batch["graph"],
+                                limits_profile=getattr(args, "limits_profile", None),
                             )
                         )
                     except Exception as exc:
@@ -252,6 +258,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             directory / "attempt-error.json",
                             {
                                 "exception_type": type(exc).__name__,
+                                "launch_id": os.environ.get("II_LAUNCH_ID"),
                                 "model": model_id,
                                 "fault": fault,
                                 "repeat": repeat,
@@ -264,6 +271,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     if (directory / "attempt-error.json").exists():
                         g["process"]["execution_status"] = "failed"
                     save(directory / "grade.json", g)
+                    print(f"{g['verdict']} | {directory / 'report.md'}", flush=True)
                     return g
 
             grades.extend(await asyncio.gather(*(run_job(*job) for job in jobs)))
@@ -282,7 +290,7 @@ def add_commands(sub):
     command = sub.add_parser("eval")
     command.add_argument("run_dirs", nargs="+", type=Path)
     command.add_argument("--fault", choices=FAMILIES)
-    command.add_argument("--out", type=Path)
+    command.add_argument("--out", type=Path, default=batch_output("eval"))
     command = sub.add_parser("eval-suite")
     add_graph_argument(command)
     command.add_argument("--faults", default="all")
@@ -298,7 +306,9 @@ def add_commands(sub):
     )
     command.add_argument("--budget-usd", default="2.00")
     command.add_argument("--max-input-tokens", type=int, default=64000)
-    command.add_argument("--out", type=Path, required=True)
+    command.add_argument("--out", type=Path, default=batch_output())
+    command.add_argument("--trace", choices=["phoenix"])
+    command.add_argument("--limits-profile", choices=PROFILES)
     command.add_argument("--script", type=Path)
 
 

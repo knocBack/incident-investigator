@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from incident_investigator.contracts import PAYLOADS
 from incident_investigator.graph_config import recorded_graph
 from incident_investigator.sources.loader import CaseSnapshot
+
+
+def retain_snapshot(snapshot: CaseSnapshot, out: Path) -> None:
+    # Preserve the exact agent-visible snapshot alongside artifacts for local inspection.
+    from incident_investigator.workspace import write_json
+
+    frozen = out / "snapshot"
+    frozen.mkdir()
+    write_json(frozen / "alert.json", dict(snapshot.alert))
+    write_json(frozen / "fault-plan.json", dict(snapshot.fault_plan))
+    (frozen / "observations.jsonl").write_text(
+        "".join(row.model_dump_json() + "\n" for row in snapshot.observations)
+    )
+    write_json(
+        frozen / "manifest.json",
+        {
+            "cases": {
+                snapshot.case_id: {
+                    "alert": "alert.json",
+                    "observations": "observations.jsonl",
+                    "fault_plan": "fault-plan.json",
+                    "dataset_digest": snapshot.dataset_digest,
+                }
+            }
+        },
+    )
 
 
 def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
@@ -39,6 +66,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
     result = {
         "schema_version": "m3.v1",
         "run_id": c["run_id"],
+        "launch_id": os.environ.get("II_LAUNCH_ID"),
         "case_id": c["case_id"],
         "graph": recorded_graph(c.get("graph")),
         "dataset_digest": snapshot.dataset_digest,

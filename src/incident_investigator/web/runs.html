@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block content %}
+    <div class="title-row">
+        <div>
+            <span class="eyebrow">Evidence before conclusions</span>
+            <h1>Every run, in one place.</h1>
+            <p class="subtitle">Reports, frozen evidence, grades and retained history. Open agent behavior in Phoenix.</p>
+        </div>
+        <a class="button primary" href="/run">＋ Run evaluation</a>
+    </div>
+    {{ m.stats(stats) }}
+    <form class="filters" method="get">
+        {% for key, opts in options.items() %}
+            <label>
+                {{ key|title }}<select name="{{ key }}">
+                <option value="">All</option>
+                {% for option in opts %}
+                    <option value="{{ option }}"
+                            {% if filters[key] == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+                </select>
+            </label>
+        {% endfor %}
+        <label>
+            Sort<select name="sort">
+            {% for key in ['created','cost','wall_seconds','verdict'] %}
+                <option value="{{ key }}"
+                        {% if request.query_params.get('sort','created') == key %}selected{% endif %}>{{ key }}</option>
+            {% endfor %}
+            </select>
+        </label>
+        <button class="button">Filter</button>
+    </form>
+    <div class="card flush">
+        <div class="card-title">
+            <h3>{{ runs|length }} attempts</h3>
+        </div>
+        {{ m.runs(runs) }}
+    </div>
+    {% if suites %}
+        <div class="card">
+            <h2>Suites</h2>
+            {% for suite in suites %}
+                <p>
+                    <a href="/suites/{{ suite.id }}">{{ suite.name }}</a>
+                    <small>{{ suite.location }}</small>
+                </p>
+            {% endfor %}
+        </div>
+    {% endif %}
+    <p class="page-note">Import existing history in place: <code>incident-investigator import &lt;dir&gt;…</code>. Sources remain read-only. New grades and human reviews stay in this workspace.</p>
+{% endblock %}

@@ -131,3 +131,134 @@ uv run ruff check .
 ```
 
 </details>
+
+## Console
+
+```sh
+uv sync --locked
+uv run incident-investigator console
+# Open http://127.0.0.1:8765
+```
+
+The console binds only to loopback. It uses FastAPI, server-rendered HTML, and
+small vanilla JavaScript files; there is no frontend build or account.
+
+1. Open **Run evaluation**. Faults are discovered from `evals/expected/faults/*.json`
+   and the lab registry. Select scripted, one or more faults, repeats, concurrency
+   (default 2), and a limits profile. Review the CLI command, then launch.
+2. The job page streams the real command's output and links completed attempts,
+   including failed runs. One console job runs at a time; its batch concurrency
+   remains configurable. Disconnecting the browser does not stop a job. Server
+   shutdown stops its child process. Logs are capped at 2 MB and jobs at one hour.
+3. Open a run's **Report**. Evidence citations link to saved observations or tool
+   receipts. **Frozen evidence** browses the complete retained input snapshot,
+   filtered by source, service, and time. Older runs without snapshots explicitly
+   show only their retrieved evidence. Raw result JSON remains expandable.
+4. **Grade** shows automatic checks alongside the evaluator's expected answer.
+   Use **Grade this run** to invoke the real `eval` command. **Rubric** saves five
+   human dimensions and reasons in a workspace sidecar. Expected answers and human
+   notes never become investigator inputs or agent spans.
+5. Open a suite for pass@1, pass@k, and pass^k by fault/model/recorded graph.
+   Select k; the UI reports its effective value when fewer attempts exist.
+   Failures remain in denominators. Compare two runs or suites under **Compare**.
+   These are exploratory measurements; automatic correctness is not semantic proof.
+
+OpenRouter launches require an explicit confirmation checkbox and a complete model
+ID. The API key is read only from `OPENROUTER_API_KEY` in the server environment.
+Use `eval-suite` for provider calls so its existing shared budget guard applies;
+`demo` in the run panel is scripted only. The panel discovers graph options from
+the CLI, so an unavailable graph cannot be launched. Empty or invalid settings
+produce an error before spawning a process. POSTs require a per-console token and
+same-origin requests; do not expose this local utility through a public proxy.
+
+### Workspace and historical runs
+
+Default output is one gitignored `./var` directory. Set `II_HOME=/absolute/path`
+for a different home. Explicit `--out` remains supported.
+
+```text
+var/runs/<run_id>/       investigate and demo
+var/suites/<batch_id>/   eval-suite, or separate eval grades
+var/lab/<case>/          lab snapshots
+var/lab/telemetry.jsonl  lab server telemetry
+var/jobs/<job_id>/       command metadata, capped output.log, isolated eval input
+var/reviews/<run-key>/   editable human-rubric.json
+var/imports.json        external read-only roots
+var/index.json          rebuildable metadata index
+```
+
+Each new investigation retains `snapshot/{manifest.json,alert.json,observations.jsonl,
+fault-plan.json}` next to `report.md`, `result.json`, `trace.jsonl`, and `state.sqlite`.
+The snapshot and run metadata are saved before graph execution, so unfinished
+attempts remain inspectable even without a final report. The index labels them
+`unfinished`, rather than implying they are still running. The snapshot contains
+the exact frozen source, with its digest; grading expectations
+remain separate. `eval` now defaults to a fresh workspace suite directory, preserving
+original runs. Explicit `--out` selects a different grading destination.
+
+```sh
+uv run incident-investigator import /path/to/old-runs /path/to/old-suite
+II_HOME=/tmp/ii-demo uv run incident-investigator console --port 8766
+```
+
+Imports index existing artifacts in place, without changing sources. Overlapping
+roots resolve to a single run. New grades, human reviews, and jobs stay inside the
+workspace. The index is rebuilt by scanning when pages are requested, so externally
+created runs under the home appear without registration. Unknown usage remains
+unknown; historical graph names use the shared graph-provenance mapping (`current` →
+`hub`, `explicit` → `staged`; pre-selection runs used `hub`).
+
+### Storage extension point
+
+`storage.py` defines `ArtifactStore`, `RunRepository`, and `EvalCatalog` ports.
+`IndexedRunRepository` handles metadata, filters, suite membership, and sorting;
+it knows opaque artifact keys rather than filesystem layouts. File and memory
+artifact adapters share a contract suite. File and memory eval catalog adapters
+share discovery/expected-answer contracts. The console receives a `Repositories`
+bundle by dependency injection, and never opens artifact paths.
+
+The default factory uses filesystem storage; `II_STORAGE=memory` selects an
+in-memory viewer/review backend (no subprocess launcher by default). A future
+S3/MinIO adapter implements `ArtifactStore.read/write/list_keys/import_tree/location`
+and is selected at the factory. Metadata/query logic and console callers remain
+unchanged. The base adapter helpers publish CLI output and materialize isolated
+local evaluator input; an object store can upload/download at that boundary.
+No object-store dependency is installed. The local execution workspace is a
+separate injected setting from blob storage. This MVP rescans local metadata;
+large indexed deployments would warrant another `RunRepository` implementation.
+
+### Optional Phoenix agent observability
+
+The console handles evaluation and frozen evidence. **Phoenix** handles agent
+behavior: prompts, model responses, tool calls, arguments/results, counts, usage,
+cost and latency. It is off by default, local-only, and not needed for tests.
+
+Install the exporter/instrumentation extra and run a separate local Phoenix
+instance (the Phoenix server is deliberately not a project dependency):
+
+```sh
+uv sync --locked --extra phoenix
+# Separate terminal; install/run the local open-source viewer:
+uvx --from arize-phoenix phoenix serve
+# Then enable capture in the run panel, or:
+II_PHOENIX=1 uv run --extra phoenix incident-investigator demo \
+  --model scripted --script tests/scripted-demo.json
+```
+
+`--trace phoenix` also enables export on investigate/demo/eval-suite.
+`II_PHOENIX_URL` defaults to `http://127.0.0.1:6006`; only unauthenticated loopback
+HTTP endpoints are accepted. Full actual model messages and responses are stored
+locally in Phoenix when enabled. OpenInference LangChain instrumentation supplies
+graph spans; explicit AGENT, LLM, and TOOL spans retain task/call IDs and usage for
+our custom model adapters. Each run has its own trace/session identity. Fault
+expectations and API credentials are not attached to these spans.
+
+After export, `phoenix.json` records the trace ID and a deep link resolved through
+Phoenix's local project API. **Open in Phoenix** appears when that URL is available.
+A missing collector leaves the local report intact and records an unresolved link;
+historical tracing-off runs show **not captured**. `trace.jsonl` and LangGraph's
+SQLite checkpoints remain authoritative local artifacts; the console does not
+rebuild a second Decisions/State/Telemetry GUI. LangSmith remains disabled.
+
+To exercise explicit span parentage/payload checks with a local in-memory exporter:
+`uv run --extra phoenix pytest -q tests/test_console_tracing.py`.

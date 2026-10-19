@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block content %}
+    <span class="eyebrow">Exploratory · no acceptance threshold</span>
+    <h1>{{ suite.name }}</h1>
+    {{ m.stats(stats) }}
+    <form class="filters">
+        <label>
+            k<input type="number" min="1" max="100" name="k" value="{{ k }}">
+        </label>
+        <button class="button">Update</button>
+    </form>
+    <div class="card flush">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Fault / model / graph</th>
+                        <th>n / correct</th>
+                        <th>pass@1</th>
+                        <th>pass@k</th>
+                        <th>pass^k</th>
+                        <th>Effective k</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in metrics %}
+                        <tr>
+                            <td>
+                                {{ row.fault }}<small>{{ row.model }} · {{ row.graph }}</small>
+                            </td>
+                            <td>{{ row.n }} / {{ row.correct }}</td>
+                            <td>{{ '%.3f'|format(row.pass1) }}</td>
+                            <td>{{ '%.3f'|format(row.passk) }}</td>
+                            <td>{{ '%.3f'|format(row.powerk) }}</td>
+                            <td>{{ row.k }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <p class="page-note">k is clamped to observed attempts per fault/model/graph. Failures and missing reports remain in the denominator. Requested repeats may differ from observed attempts; inspect batch settings.</p>
+    <details>
+        <summary>Recorded batch settings</summary>
+        <pre>{{ suite.batch|pretty }}</pre>
+    </details>
+    <div class="card flush">{{ m.runs(runs) }}</div>
+{% endblock %}

@@ -16,6 +16,13 @@ from pydantic import BaseModel, ConfigDict
 
 from incident_investigator.telemetry.models import SourceObservation
 
+FAULTS = (
+    "bad_configuration",
+    "deployment_regression",
+    "database_contention",
+    "resource_exhaustion",
+    "traffic_overload",
+)
 FaultName = str
 
 
@@ -255,14 +262,7 @@ def create_app(
 
     @app.post("/admin/faults")
     def set_fault(request: FaultRequest) -> dict[str, list[str]]:
-        known = {
-            "deployment_regression",
-            "bad_configuration",
-            "database_contention",
-            "resource_exhaustion",
-            "traffic_overload",
-        }
-        if request.family not in known:
+        if request.family not in FAULTS:
             raise HTTPException(status_code=422, detail="unknown fault family")
         app.state.faults.add(request.family)
         if request.family == "deployment_regression":

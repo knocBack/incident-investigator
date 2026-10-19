@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,15 +15,18 @@ import httpx
 from incident_investigator.contracts import PROFILES, Limits
 from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument
 from incident_investigator.lab.__main__ import snapshot
-from incident_investigator.lab.app import JsonlTelemetrySink, create_app
+from incident_investigator.lab.app import FAULTS, JsonlTelemetrySink, create_app
 from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
 from incident_investigator.runtime import investigate
 from incident_investigator.sources.loader import load_snapshot
+from incident_investigator.storage import repositories
+from incident_investigator.workspace import home
 
 
 def profile(args) -> Limits:
     """Live providers get the demo-live profile; its per-call timeout also bounds adapters."""
-    return PROFILES["demo-live" if args.model in {"openrouter", "codex"} else "demo"]
+    selected = getattr(args, "limits_profile", None)
+    return PROFILES[selected or ("demo-live" if args.model in {"openrouter", "codex"} else "demo")]
 
 
 def model(args):
@@ -30,7 +34,10 @@ def model(args):
     if injected is not None:
         return injected
     if args.model == "openrouter":
-        return OpenRouterModel(timeout_seconds=profile(args).call_seconds)
+        adapter = OpenRouterModel(timeout_seconds=profile(args).call_seconds)
+        if getattr(args, "model_id", None):
+            adapter._models = dict.fromkeys(adapter._models, args.model_id)
+        return adapter
     if args.model == "codex":
         return CodexExecModel(timeout_seconds=profile(args).call_seconds)
     actions = json.loads(args.script.read_text()) if args.script else []
@@ -122,7 +129,7 @@ async def run(args) -> int:
     return 1 if failed else 0
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="incident-investigator")
     sub = parser.add_subparsers(dest="command", required=True)
     inspect = sub.add_parser("inspect")
@@ -138,7 +145,10 @@ def main() -> None:
             type=Path,
             help="explicit ScriptedModel action JSON; no runtime default script",
         )
-        command.add_argument("--out", type=Path, default=Path("runs"))
+        command.add_argument("--out", type=Path, default=home() / "runs")
+        command.add_argument("--trace", choices=["phoenix"])
+        command.add_argument("--limits-profile", choices=PROFILES)
+        command.add_argument("--model-id", help="OpenRouter model id for all roles")
         if name == "investigate":
             command.add_argument("--case", action="append")
             command.add_argument(
@@ -153,19 +163,42 @@ def main() -> None:
             command.add_argument(
                 "--fault",
                 default="bad_configuration",
-                choices=[
-                    "bad_configuration",
-                    "deployment_regression",
-                    "database_contention",
-                    "resource_exhaustion",
-                    "traffic_overload",
-                ],
+                choices=FAULTS,
             )
-    from incident_investigator.grading.suite import add_commands, execute
+    from incident_investigator.grading.suite import add_commands
 
     add_commands(sub)
+    command = sub.add_parser(
+        "import", help="index existing artifacts in place; never modify sources"
+    )
+    command.add_argument("directories", nargs="+", type=Path)
+    command = sub.add_parser("console", help="serve the local artifact console")
+    command.add_argument("--port", type=int, default=8765)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
+    if getattr(args, "trace", None) == "phoenix":
+        os.environ["II_PHOENIX"] = "1"
+    if args.command == "import":
+        repo = repositories()
+        repo.runs.import_roots(args.directories)
+        print(
+            f"Indexed {len(repo.runs.runs())} runs and {len(repo.runs.suites())} suites in {home()}"
+        )
+        return
+    if args.command == "console":
+        import uvicorn
+
+        from incident_investigator.console import create_console
+
+        uvicorn.run(create_console(), host="127.0.0.1", port=args.port)
+        return
     if args.command in {"eval", "eval-suite"}:
+        from incident_investigator.grading.suite import execute
+
         asyncio.run(execute(args))
         return
     if args.command == "inspect":
