@@ -4,6 +4,8 @@ Local multi-agent incident investigation MVP.
 
 Status: M3 six-role local investigation demo; recovery hardening remains M4.
 
+**Take-home submission:** start at [docs/submission](docs/submission/README.md) for the architecture, decisions, results so far, technical note and console screenshots.
+
 ## Try the retrieval tools
 
 ```sh
