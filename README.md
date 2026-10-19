@@ -7,7 +7,7 @@ Status: M0 scaffolding only.
 ## Quickstart
 
 ```sh
-uv sync
+uv sync --locked
 uv run pytest
 ```
 

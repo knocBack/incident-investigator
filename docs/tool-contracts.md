@@ -138,9 +138,9 @@ Page/observation/snapshot byte limits include serialized envelopes where applica
 
 ## 7. Dependency preflight and next executable milestone
 
-Target installed CPython 3.13.13; its SQLite library reports 3.53.4. Candidate direct dependencies are `langgraph==1.2.16`, `langgraph-checkpoint-sqlite==3.1.2`, `pydantic==2.12.5`, `pytest==9.0.2`, and `pytest-asyncio==1.3.0`. Declare `langchain-core` directly because the tool wrapper is imported; select its compatible version through resolution and freeze it with every transitive dependency in the lockfile. Candidates are not adopted pins until resolution and integration checks pass. Do not invent a lockfile or silently substitute a different stack after a resolver failure.
+Target installed CPython 3.13.13; its SQLite library reports 3.53.4. Direct dependencies are `langgraph==1.2.16`, `langgraph-checkpoint-sqlite==3.1.2`, `pydantic==2.12.5`, `pytest==9.0.2`, and `pytest-asyncio==1.3.0`. `langchain-core` is declared directly because the tool wrapper is imported. Resolution succeeded and the complete adopted set is pinned in `uv.lock`; integration validation remains separate.
 
-Executed read-only resolution attempt on 2026-10-19, with temporary cache and no installation/output file:
+Historical initial resolution attempt on 2026-10-19, retained because it encountered a PyPI DNS failure:
 
 ```sh
 uv --no-config pip compile --python-version 3.13 --no-python-downloads - <<'REQUIREMENTS'
@@ -153,7 +153,7 @@ pytest-asyncio==1.3.0
 REQUIREMENTS
 ```
 
-Outcome: dependency resolution succeeded on 2026-10-19. The adopted lock resolves langgraph 1.2.16, langgraph-checkpoint-sqlite 3.1.2, pydantic 2.12.5, langchain-core 1.6.12, aiosqlite 0.22.1, pytest 9.0.2, and pytest-asyncio 1.3.0. Resolution establishes compatible pins; imports and graph behavior are covered by the preflight test.
+Outcome: a later dependency resolution succeeded on 2026-10-19. The adopted lock resolves langgraph 1.2.16, langgraph-checkpoint-sqlite 3.1.2, pydantic 2.12.5, langchain-core 1.6.12, aiosqlite 0.22.1, pytest 9.0.2, and pytest-asyncio 1.3.0. Resolution establishes compatible pins; the preflight covers imports and one synchronous checkpoint graph step, while typed-tool and pending-write integration remain pending.
 
 The first product-validation gate is a resolved dependency lock plus actual imports, native typed-tool schema/async invocation, one synchronous SQLite-backed graph transition, and successful sibling pending-write recovery with controlled doubles. The LLD-01 specialist target uses these retrieval contracts, one development incident, minimum traces, and basic guards; scripted model responses and controlled failures permit validation without provider selection or paid calls. Other role payloads/full coordination must be specified before their affected behavior. The [LLD handoff](lld.md#8-remaining-contracts-and-decision-gates) records the remaining gates. Workspace procedures are outside this product-design handoff.
 

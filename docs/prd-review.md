@@ -2,7 +2,7 @@
 
 Original PRD verdict (historical): ready to enter HLD after one narrow recovery clarification, saved in the PRD and evaluation specification. No missing core assignment requirement was found. This is a document review, not evidence of working software.
 
-Current disposition, 2026-10-19: HLD-01/02/03 are accepted in the [HLD](hld.md). R-02 retains supporting-path gaps with completion triggers. [LLD-01](lld.md) specifies common state and one specialist lifecycle; [LLD-02](tool-contracts.md) specifies frozen JSONL retrieval/page/fault contracts and a concrete local double profile. The recorded resolution attempt failed on PyPI DNS; no new environment check is claimed and pins/integration remain unvalidated. The [LLD handoff](lld.md#8-remaining-contracts-and-decision-gates) consolidates remaining decisions. Requirement coverage remains valid; no application or benchmark validation is implied.
+Current disposition, 2026-10-19: HLD-01/02/03 are accepted in the [HLD](hld.md). R-02 retains supporting-path gaps with completion triggers. [LLD-01](lld.md) specifies common state and one specialist lifecycle; [LLD-02](tool-contracts.md) specifies frozen JSONL retrieval/page/fault contracts and a concrete local double profile. Dependency pins are adopted in `uv.lock` after resolution succeeded; graph/checkpointer integration, remaining contracts, real-model settings, and product validation remain pending. The [LLD handoff](lld.md#8-remaining-contracts-and-decision-gates) consolidates remaining decisions. Requirement coverage remains valid; no application or benchmark validation is implied.
 
 ## What was checked
 
@@ -42,7 +42,7 @@ Two remaining risks deserve attention without expanding scope: six roles plus a 
 
 HLD-01 accepts one investigation record whose task-scoped contributions are validated and committed by runtime code. HLD-02 accepts bounded collaboration, dependencies, critic feedback, closure, and progress accounting. HLD-03 maps these rules to serialized control transitions, bounded parallel call nodes, and synchronous SQLite-backed graph persistence, with the same infrastructure reused by the single-agent baseline.
 
-LLD-01/02 are specified. Dependency adoption and focused real integration checks remain the first product-validation gate for one specialist lifecycle. Other contracts close before the affected behavior; benchmark configuration/harness precede comparison batches. The LLD-02 preflight records a PyPI DNS failure, not a fresh environment diagnosis. All product reliability groups remain planned; this documentation reconciliation does not implement the application.
+LLD-01/02 are specified. Dependency pins are adopted in `uv.lock`; focused real integration checks remain the first product-validation gate for one specialist lifecycle. Other contracts close before the affected behavior; benchmark configuration/harness precede comparison batches. Historical note: the initial LLD-02 preflight encountered a PyPI DNS failure before later resolution succeeded. All product reliability groups remain planned; this documentation reconciliation does not implement the application.
 
 ## R-02: supporting HLD paths were under-specified
 

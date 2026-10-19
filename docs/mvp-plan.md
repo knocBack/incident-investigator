@@ -1,6 +1,6 @@
 # Product requirements: incident investigation MVP
 
-Status: PRD finalized on 2026-10-19. Core HLD selects Python + LangGraph + local SQLite. [LLD-01](lld.md) specifies common state and one specialist lifecycle; [LLD-02](tool-contracts.md) specifies frozen JSONL retrieval/page/fault contracts and controlled local settings. Adopted dependency pins, other role/coordination contracts, real-model settings/spending cap, and product validation remain outstanding. Functional investigation is the priority; the HLD delivery gap register retains supporting work with completion triggers. Probes/documentation checks do not establish application acceptance.
+Status: PRD finalized on 2026-10-19. Core HLD selects Python + LangGraph + local SQLite. [LLD-01](lld.md) specifies common state and one specialist lifecycle; [LLD-02](tool-contracts.md) specifies frozen JSONL retrieval/page/fault contracts and controlled local settings. Dependency pins are adopted in `uv.lock` after resolution succeeded; other role/coordination contracts, real-model settings/spending cap, and product validation remain outstanding. Functional investigation is the priority; the HLD delivery gap register retains supporting work with completion triggers. Probes/documentation checks do not establish application acceptance.
 
 ## Goal and boundaries
 
@@ -140,7 +140,7 @@ Useful inputs: coordinator/specialist separation, shared session state, tools is
 
 The accepted architecture and transcript checkpoint were saved before focused evaluation updates. LLD-01 specifies common state/task/result records, identity merges, checkpoint/replay transitions, and inspection/export boundaries for one specialist lifecycle. LLD-02 specifies retrieval/source/page/fault contracts and numeric controlled-test settings. The [remaining-contracts handoff](lld.md#8-remaining-contracts-and-decision-gates) is the current index for other role payloads, coordination records, limits, public interfaces, model settings, and evaluation configuration.
 
-The recorded LLD-02 resolver attempt failed on PyPI DNS; no adopted pins or graph smoke result exists, and this documentation review does not recheck the environment. Dependency adoption and real graph/checkpointer checks precede validation of the first executable lifecycle. Other contracts close before their affected behavior; provider/model and validated reservation/spending bounds precede real-model calls. Benchmark repeat count, configuration, and harness precede comparison batches, not unrelated lifecycle work with doubles. Minimal traces/guardrails accompany execution; richer observability remains deferred until the system works. Keep [gap completion triggers](hld.md#delivery-gap-register) visible. Workspace procedures are outside this product-design handoff.
+Historical note: the initial LLD-02 resolver attempt encountered a PyPI DNS failure; later resolution succeeded and dependency pins are adopted in `uv.lock`. Graph/checkpointer integration validation remains pending. Other contracts close before their affected behavior; provider/model and validated reservation/spending bounds precede real-model calls. Benchmark repeat count, configuration, and harness precede comparison batches, not unrelated lifecycle work with doubles. Minimal traces/guardrails accompany execution; richer observability remains deferred until the system works. Keep [gap completion triggers](hld.md#delivery-gap-register) visible. Workspace procedures are outside this product-design handoff.
 
 ## Implementation aids and source lessons
 
@@ -179,7 +179,7 @@ Required final delivery: runnable implementation/setup, architecture diagram and
 
 Completed here: finalized PRD, incident/evaluation specification and task rubric, accepted HLD-01/02/03, LLD-01 common/specialist lifecycle, LLD-02 JSONL/tool/page/fault contracts and controlled-test configuration, the consolidated remaining-contracts handoff, earlier scratch probes, and saved conversation checkpoints. Coverage remains in the existing planned HLD groups.
 
-Not completed: remaining role/coordination LLD, adopted dependency pins, paid-model settings, runnable fixtures/tools/agents, product tests, graph/checkpointer integration validation, benchmark results, validated diagnostic readiness, implementation-verified architecture, or the submission technical note. The saved configuration has no application loader yet. Documentation checks and primitive probes are not product validation. Refresh the separate conversation export before submission.
+Not completed: remaining role/coordination LLD, paid-model settings, runnable fixtures/tools/agents, product tests, graph/checkpointer integration validation, benchmark results, validated diagnostic readiness, implementation-verified architecture, or the submission technical note. The saved configuration has no application loader yet. Documentation checks and primitive probes are not product validation. Refresh the separate conversation export before submission.
 
 ## Design evidence
 

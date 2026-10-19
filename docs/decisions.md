@@ -25,4 +25,4 @@ These decisions record the review's recommended answers.
 - S7: Grade every report and only sample task-level grading.
 - S8: Use one test gate per milestone and keep transcripts private.
 
-Scope addendum: The MVP must be demoable against a local FastAPI lab application (Checkout -> Inventory -> Database request path with controllable fault injection and a load client) whose emitted telemetry feeds the same tool contracts; frozen JSONL snapshots remain the evaluation substrate.
+Scope addendum: The MVP must be demoable against a local FastAPI lab application (Checkout -> Inventory -> Database request path with controllable fault injection and a load client) that produces telemetry. Investigations consume frozen JSONL snapshots through the existing tool contracts; agents and tools never call the live lab directly, and evaluation uses frozen snapshots.
