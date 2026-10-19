@@ -63,6 +63,34 @@ def test_repository_contract(repo, scripted_run):
     assert before == {p: p.read_bytes() for p in before}
 
 
+def test_overlapping_imports_keep_suite_membership(repo, tmp_path, monkeypatch):
+    from incident_investigator import storage
+    from incident_investigator.workspace import write_json
+
+    source = tmp_path / "history"
+    run = source / "batch" / "r0"
+    write_json(source / "batch" / "batch.json", {"repeats": 1})
+    write_json(run / "result.json", {"run_id": "r0", "status": "completed"})
+    write_json(run / "grade.json", {"family": "fault", "verdict": "correct"})
+    original = storage.identity
+
+    def ordered_identity(value):
+        # Opaque import ids deliberately put the suite-less nested root first.
+        if value == str(run.resolve()):
+            return "a-nested"
+        if value == str(source.resolve()):
+            return "z-parent"
+        return original(value)
+
+    monkeypatch.setattr(storage, "identity", ordered_identity)
+    repo.runs.import_roots([source, run])
+    rows = repo.runs.runs()
+    assert len(rows) == 1
+    assert rows[0]["suite"] == repo.runs.suites()[0]["id"]
+    assert rows[0]["suite_name"] == "batch"
+    assert suite_metrics(rows, 1)[0]["pass1"] == 1
+
+
 def test_suites_unknown_usage_and_separate_grade_overlay(repo):
     store = repo.artifacts
     store.save_json("suites/batch/batch.json", {"repeats": 4})

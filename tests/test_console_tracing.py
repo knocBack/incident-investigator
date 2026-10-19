@@ -42,6 +42,32 @@ def test_only_local_phoenix_urls():
             local_url(value)
 
 
+@pytest.mark.parametrize("failure", ["flush", "pointer"])
+async def test_optional_trace_link_failures_are_contained(failure, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from incident_investigator.telemetry import tracing
+
+    session = TraceSession("run", "case", enabled=True, tracer=object())
+    session.root = SimpleNamespace(get_span_context=lambda: SimpleNamespace(trace_id=1))
+
+    def fail_flush(**kwargs):
+        raise RuntimeError("exporter failed")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("optional pointer cannot be saved")
+
+    if failure == "flush":
+        session.provider = SimpleNamespace(force_flush=fail_flush)
+    else:
+        monkeypatch.setattr(tracing, "write_json", fail_write)
+    for final in (False, True):
+        await session.save_link(tmp_path, final=final)
+    if failure == "flush":
+        pointer = json.loads((tmp_path / "phoenix.json").read_text(encoding="utf-8"))
+        assert pointer["status"] == "collector unavailable or project not resolved"
+
+
 async def test_real_runtime_span_parentage_and_payloads(monkeypatch, tmp_path):
     sdk = pytest.importorskip("opentelemetry.sdk.trace")
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor

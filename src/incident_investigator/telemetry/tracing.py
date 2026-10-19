@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from functools import cache
 from urllib.parse import quote, urlsplit
 
@@ -229,8 +229,8 @@ class TraceSession:
         if self.provider:
             import asyncio
 
-            await asyncio.to_thread(self.provider.force_flush, timeout_millis=2000)
             try:
+                await asyncio.to_thread(self.provider.force_flush, timeout_millis=2000)
                 # Phoenix ingests asynchronously after acknowledging OTLP. A fresh
                 # project can briefly return 404 even though export already succeeded.
                 async with asyncio.timeout(2):
@@ -255,6 +255,8 @@ class TraceSession:
                                 + f"/projects/{quote(project_id, safe='')}/traces/{trace_id}"
                             )
                             break
-            except (httpx.HTTPError, ValueError, KeyError, TypeError, TimeoutError):
+            except Exception:
                 pointer["status"] = "collector unavailable or project not resolved"
-        write_json(directory / "phoenix.json", pointer)
+        # An optional trace pointer must never prevent the local investigation.
+        with suppress(OSError):
+            write_json(directory / "phoenix.json", pointer)

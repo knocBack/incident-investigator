@@ -298,8 +298,15 @@ class IndexedRunRepository(RunRepository):
                 g = store.json(key)
                 if g.get("run_id") and graded_at(g) >= graded_at(overlays.get(g["run_id"], {})):
                     overlays[g["run_id"]] = g
-        # Resolve overlapping import roots once, using canonical provenance.
-        unique = {store.location(prefix): prefix for prefix in sorted(prefixes, reverse=True)}
+        suite_prefixes = sorted(suites, key=len, reverse=True)
+
+        def suite_for(prefix):
+            return next((suites[p] for p in suite_prefixes if prefix.startswith(p + "/")), None)
+
+        # Prefer suite ancestry, then lexical order, for identical canonical sources.
+        unique = {}
+        for prefix in sorted(prefixes, key=lambda p: (suite_for(p) is None, p)):
+            unique.setdefault(store.location(prefix), prefix)
         rows = []
         for location, prefix in unique.items():
             result = store.json(prefix + "/result.json") or store.json(prefix + "/run.json")
@@ -318,14 +325,7 @@ class IndexedRunRepository(RunRepository):
                 or grade.get("models")
                 or ({"requested": attempt["model"]} if attempt.get("model") else {})
             )
-            suite = next(
-                (
-                    suites[p]
-                    for p in sorted(suites, key=len, reverse=True)
-                    if prefix.startswith(p + "/")
-                ),
-                None,
-            )
+            suite = suite_for(prefix)
             created = min(times) if times else result.get("created", 0)
             rows.append(
                 {
