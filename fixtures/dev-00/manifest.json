@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "dev-00": {
+      "alert": "alert.json",
+      "dataset_digest": "d8d1cfa89558d5b47956359979534aaeb76709452faaaa0677cee77c22838a41",
+      "fault_plan": "fault-plan.json",
+      "observations": "observations.jsonl"
+    }
+  }
+}
