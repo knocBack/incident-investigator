@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+  path_instructions:
+    - path: "docs/**"
+      instructions: "These are accepted design specifications. docs/evaluation-plan.md is evaluator-only; do not expose its expectations to runtime agents."
