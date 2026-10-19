@@ -2,7 +2,54 @@
 
 Local multi-agent incident investigation MVP.
 
-Status: M3 six-role local investigation demo; recovery hardening remains M4.
+A team of six AI agents investigates a production incident the way an on-call
+engineer would. They read logs, metrics, deploy history and service dependencies,
+rank likely causes, have a critic challenge them, and write a report in which every
+claim cites retrieved evidence.
+
+## Current state (checkpoint: 2026-10-19)
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| M0 to M2 | Project setup, fault-injection lab, five evidence tools | Done |
+| M3 | Six-role investigation end to end on the staged graph | Done |
+| Evals | Automatic grader, `eval` / `eval-suite`, pass@k and pass^k, quick mode, accurate budget cap | Done |
+| Eval console | Local console with live Arize Phoenix agent traces | In testing |
+| M4 | Reliability: public resume, crash/replay hardening, tool-failure recovery | Planned |
+| M5 | Ten-incident benchmark, two reliability variants, single-agent baseline | Planned |
+| M6 | Single-agent vs multi-agent comparison and measurements | Planned |
+
+Early results (exploratory, one run per fault, `deepseek/deepseek-v3.2` on all six roles):
+
+- **Before the quality fixes:** 0/4 correct.
+- **After the fixes** (repairing harmless model deviations, a data catalog tool, query de-duplication, longer timeouts): 5/5 correct. Each run took 287 to 482 s and cost about $0.05.
+- **Staged vs hub graph** on the five-fault quick eval: 4/5 each. The staged graph had 0 rejected model outputs, against 3 for the hub graph.
+- **Not measured yet:** pass@4 and the single-agent baseline.
+
+A run makes about 20 model calls, mostly in sequence, so it takes 5 to 8 minutes. The quick eval runs the five faults two at a time and takes about 10 to 12 minutes.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    SRC["Evidence source<br/>(fault lab today;<br/>OpenTelemetry, Prometheus,<br/>alerting, deploy history later)"] --> SNAP[Frozen snapshot]
+    SNAP --> TOOLS["Five evidence tools<br/>logs · metrics · changes ·<br/>dependencies · history"]
+    TOOLS --> PLAN
+    PLAN[Orchestrator plans] --> GATHER["Observability + Dependency<br/>gather in parallel"]
+    GATHER --> REASON[Reasoning ranks causes]
+    REASON --> CRITIC[Critic challenges]
+    CRITIC --> DECIDE{Orchestrator decides}
+    DECIDE -->|more evidence| GATHER
+    DECIDE -->|re-think| REASON
+    DECIDE -->|report| REPORT[Reporting]
+    REPORT --> OUT["report.md · result.json ·<br/>trace.jsonl · state.sqlite"]
+```
+
+- **Agents propose, code decides.** Models return structured JSON. The runtime validates it, owns IDs, budgets and routing, and accepts only evidence that was actually retrieved in that run.
+- **Extensible by design.** Agents only see narrow tool adapters over a frozen snapshot, never a live system. Adding adapters for an existing product's telemetry (OpenTelemetry, Prometheus, log stores, alerting such as Alertmanager, deploy history) points the same agents at real incidents without changing them.
+- **Storage behind interfaces.** The eval console (in testing) reads runs and artifacts through Repository interfaces, so local files can later be swapped for an object store such as MinIO or S3.
+
+See [graph variants](docs/graph.md), [architecture](docs/hld.md) and [decisions](docs/decisions.md).
 
 ## Try the retrieval tools
 
