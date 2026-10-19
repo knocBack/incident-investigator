@@ -1,0 +1,28 @@
+{
+  "version": "lab.v1",
+  "family": "deployment_regression",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "query|scan",
+    "v2|deploy|regression"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "expanded scan"
+        },
+        "attributes.query_plan": {
+          "eq": "full_scan"
+        }
+      }
+    }
+  ],
+  "wrong_alternatives": [
+    "database contention",
+    "traffic overload"
+  ],
+  "precision": "Local lab fault signature only; no unsupported deeper causal precision."
+}

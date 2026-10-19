@@ -1,0 +1,1014 @@
+{
+  "classification": "exploratory",
+  "acceptance_threshold": null,
+  "grader_version": "grader.v1",
+  "models": [
+    {
+      "models": {},
+      "runs": 3,
+      "verdicts": {
+        "correct": 1,
+        "partial": 0,
+        "wrong": 0,
+        "inconclusive": 1,
+        "no_report": 1
+      },
+      "mean_grounding": 0.8333333333333334,
+      "mean_cost": null,
+      "mean_input_tokens": null,
+      "mean_output_tokens": null,
+      "mean_model_calls": 11.333333333333334,
+      "mean_wall_seconds": 97.72806557019551,
+      "execution_failures": 1
+    },
+    {
+      "models": {
+        "critic": "nvidia/nemotron-3-super-120b-a12b:free",
+        "dependency": "nvidia/nemotron-3-super-120b-a12b:free",
+        "observability": "nvidia/nemotron-3-super-120b-a12b:free",
+        "orchestrator": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reasoning": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reporting": "nvidia/nemotron-3-super-120b-a12b:free"
+      },
+      "runs": 2,
+      "verdicts": {
+        "correct": 0,
+        "partial": 0,
+        "wrong": 0,
+        "inconclusive": 1,
+        "no_report": 1
+      },
+      "mean_grounding": null,
+      "mean_cost": null,
+      "mean_input_tokens": null,
+      "mean_output_tokens": null,
+      "mean_model_calls": 15.0,
+      "mean_wall_seconds": 107.14871847629547,
+      "execution_failures": 1
+    },
+    {
+      "models": {
+        "critic": "google/gemma-4-31b-it:free",
+        "dependency": "google/gemma-4-31b-it:free",
+        "observability": "google/gemma-4-31b-it:free",
+        "orchestrator": "google/gemma-4-31b-it:free",
+        "reasoning": "google/gemma-4-31b-it:free",
+        "reporting": "google/gemma-4-31b-it:free"
+      },
+      "runs": 1,
+      "verdicts": {
+        "correct": 0,
+        "partial": 0,
+        "wrong": 0,
+        "inconclusive": 0,
+        "no_report": 1
+      },
+      "mean_grounding": null,
+      "mean_cost": null,
+      "mean_input_tokens": null,
+      "mean_output_tokens": null,
+      "mean_model_calls": 4.0,
+      "mean_wall_seconds": 2.718050003051758,
+      "execution_failures": 1
+    },
+    {
+      "models": {
+        "critic": "deepseek/deepseek-chat",
+        "dependency": "deepseek/deepseek-chat",
+        "observability": "google/gemini-2.5-flash-lite",
+        "orchestrator": "deepseek/deepseek-chat",
+        "reasoning": "deepseek/deepseek-r1-0528",
+        "reporting": "deepseek/deepseek-chat"
+      },
+      "runs": 4,
+      "verdicts": {
+        "correct": 0,
+        "partial": 0,
+        "wrong": 0,
+        "inconclusive": 2,
+        "no_report": 2
+      },
+      "mean_grounding": null,
+      "mean_cost": null,
+      "mean_input_tokens": null,
+      "mean_output_tokens": null,
+      "mean_model_calls": 10.0,
+      "mean_wall_seconds": 99.4796831872518,
+      "execution_failures": 2
+    }
+  ],
+  "runs": [
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "e6c8a476-7422-4cff-ad74-f9fc83b34254",
+      "verdict": "correct",
+      "diagnosis_checks": {
+        "culprit_service": true,
+        "mechanism": true,
+        "key_evidence_cited": true
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": 1.0,
+        "key_evidence_retrieved": true,
+        "key_evidence_cited": true,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 49,
+        "observation_fraction": 0.8979591836734694,
+        "unknown": [],
+        "receipt_only": [
+          "33c0e685-3233-4620-a526-777f39a4adb9",
+          "571111b3-676c-45d9-8c5e-b48040ffcd43",
+          "9e112d61-9e90-4c5c-b238-c642aea878c0"
+        ]
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "report_completeness": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 3,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "dependency"
+        ],
+        "unresolved_objections": [
+          "obj-01",
+          "obj-02",
+          "obj-03"
+        ],
+        "stop_reason": null,
+        "budget_exhausted": false,
+        "execution_status": "completed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": 447199,
+          "output_tokens": 8145,
+          "known_cost": null,
+          "known_input_tokens": 447199,
+          "known_output_tokens": 8145,
+          "model_calls": 14,
+          "tool_calls": 14
+        },
+        "wall_seconds": 117.97322106361389,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {},
+      "historical_source": "live-demo/e6c8a476-7422-4cff-ad74-f9fc83b34254"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "6241d34e-f47c-4055-9bcd-2c6e3c810f1d",
+      "verdict": "no_report",
+      "diagnosis_checks": {
+        "culprit_service": true,
+        "mechanism": true,
+        "key_evidence_cited": true
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": 1.0,
+        "key_evidence_retrieved": true,
+        "key_evidence_cited": true,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 3,
+        "observation_fraction": 1.0,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "report_completeness": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 2,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "orchestrator"
+        ],
+        "unresolved_objections": [
+          "092190fc-7432-487f-b5a0-ba4975a8e26f",
+          "b9423548-c2ad-4e08-8b94-413e9ecadedb"
+        ],
+        "stop_reason": "orchestrator: invalid output: decide must dispose every recorded objection exactly once",
+        "budget_exhausted": false,
+        "execution_status": "failed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "known_cost": null,
+          "known_input_tokens": 223762,
+          "known_output_tokens": 2891,
+          "model_calls": 10,
+          "tool_calls": 6
+        },
+        "wall_seconds": 93.83630180358887,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {},
+      "historical_source": "live-demo-2/6241d34e-f47c-4055-9bcd-2c6e3c810f1d"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "6ec11489-3747-45ad-9e1d-0b3abd775aa2",
+      "verdict": "inconclusive",
+      "diagnosis_checks": {
+        "culprit_service": true,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": 0.5,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 12,
+        "observation_fraction": 0.8333333333333334,
+        "unknown": [],
+        "receipt_only": [
+          "10c0c344-f65e-43d8-9f34-08fdbfb78d98",
+          "2d546d2c-d711-44bf-b6e0-bfa99dde28e5"
+        ]
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "report_completeness": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 1,
+        "repaired_outputs": 7,
+        "failed_roles": [],
+        "unresolved_objections": [
+          "b235a2fd-a759-4767-80e3-468fb2244a70",
+          "01d7b004-8d66-46c7-93b7-9204dcc0871b",
+          "76602501-2bd6-4a27-b548-ed94ba561665"
+        ],
+        "stop_reason": "orchestrator decision repaired; unresolved objections retained",
+        "budget_exhausted": false,
+        "execution_status": "completed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": 238516,
+          "output_tokens": 4302,
+          "known_cost": null,
+          "known_input_tokens": 238516,
+          "known_output_tokens": 4302,
+          "model_calls": 10,
+          "tool_calls": 5
+        },
+        "wall_seconds": 81.37467384338379,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {},
+      "historical_source": "live-demo-3/6ec11489-3747-45ad-9e1d-0b3abd775aa2"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "60151a9e-15db-4788-95b7-e43561718433",
+      "verdict": "no_report",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "report_completeness": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 18,
+        "invalid_outputs": 0,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "dependency",
+          "observability"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "model call/task or wall time limit",
+        "budget_exhausted": true,
+        "execution_status": "resource_exhausted"
+      },
+      "resources": {
+        "totals": {
+          "cost": 0,
+          "input_tokens": 540911,
+          "output_tokens": 2287,
+          "known_cost": 0,
+          "known_input_tokens": 540911,
+          "known_output_tokens": 2287,
+          "model_calls": 21,
+          "tool_calls": 20
+        },
+        "wall_seconds": 65.82426905632019,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "nvidia/nemotron-3-super-120b-a12b:free",
+        "observability": "nvidia/nemotron-3-super-120b-a12b:free",
+        "dependency": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reasoning": "nvidia/nemotron-3-super-120b-a12b:free",
+        "critic": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reporting": "nvidia/nemotron-3-super-120b-a12b:free"
+      },
+      "historical_source": "openrouter-live-1/60151a9e-15db-4788-95b7-e43561718433"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "3142a9ea-7768-4985-95b4-40a16d378f2b",
+      "verdict": "no_report",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "report_completeness": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 0,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "orchestrator",
+          "reporting"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "reporting: ModelCallError: OpenRouter HTTP 429 (rate limited): Provider returned error",
+        "budget_exhausted": false,
+        "execution_status": "failed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "known_cost": 0,
+          "known_input_tokens": 0,
+          "known_output_tokens": 0,
+          "model_calls": 4,
+          "tool_calls": 0
+        },
+        "wall_seconds": 2.718050003051758,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "google/gemma-4-31b-it:free",
+        "observability": "google/gemma-4-31b-it:free",
+        "dependency": "google/gemma-4-31b-it:free",
+        "reasoning": "google/gemma-4-31b-it:free",
+        "critic": "google/gemma-4-31b-it:free",
+        "reporting": "google/gemma-4-31b-it:free"
+      },
+      "historical_source": "openrouter-live-2/3142a9ea-7768-4985-95b4-40a16d378f2b"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "8ba42721-882c-4445-b65b-e7fe01892a0a",
+      "verdict": "inconclusive",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 4,
+        "observation_fraction": 0.25,
+        "unknown": [],
+        "receipt_only": [
+          "58371955-63a3-4880-ac65-4274401e8fc2",
+          "ec6b1557-93b8-405e-a7e4-49beb027611d"
+        ]
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "report_completeness": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 0,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "observability",
+          "reasoning"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "reasoning: TimeoutError: ",
+        "budget_exhausted": false,
+        "execution_status": "completed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "known_cost": 0,
+          "known_input_tokens": 22102,
+          "known_output_tokens": 1114,
+          "model_calls": 9,
+          "tool_calls": 2
+        },
+        "wall_seconds": 148.47316789627075,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "nvidia/nemotron-3-super-120b-a12b:free",
+        "observability": "nvidia/nemotron-3-super-120b-a12b:free",
+        "dependency": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reasoning": "nvidia/nemotron-3-super-120b-a12b:free",
+        "critic": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reporting": "nvidia/nemotron-3-super-120b-a12b:free"
+      },
+      "historical_source": "openrouter-live-3/8ba42721-882c-4445-b65b-e7fe01892a0a"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "bad_configuration",
+      "run_id": "04edfc8f-f989-4b93-9b3d-1f8779ec80b6",
+      "verdict": "inconclusive",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "report_completeness": {
+        "summary": true,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": true,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 2,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "orchestrator"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "orchestrator: invalid output: initial plan must gather with both specialist roles",
+        "budget_exhausted": false,
+        "execution_status": "completed"
+      },
+      "resources": {
+        "totals": {
+          "cost": 0.00108011,
+          "input_tokens": 2121,
+          "output_tokens": 451,
+          "known_cost": 0.00108011,
+          "known_input_tokens": 2121,
+          "known_output_tokens": 451,
+          "model_calls": 3,
+          "tool_calls": 0
+        },
+        "wall_seconds": 44.88268054096261,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "deepseek/deepseek-chat",
+        "observability": "google/gemini-2.5-flash-lite",
+        "dependency": "deepseek/deepseek-chat",
+        "reasoning": "deepseek/deepseek-r1-0528",
+        "critic": "deepseek/deepseek-chat",
+        "reporting": "deepseek/deepseek-chat"
+      },
+      "historical_source": "paid-runs/04edfc8f-f989-4b93-9b3d-1f8779ec80b6"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "database_contention",
+      "run_id": "1f96ab93-906e-4d57-8e7a-b31bd0d80aa2",
+      "verdict": "no_report",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "deployment regression",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "connection leak",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "report_completeness": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 4,
+        "invalid_outputs": 1,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "dependency"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "model call/task or wall time limit",
+        "budget_exhausted": true,
+        "execution_status": "resource_exhausted"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "known_cost": 0.016048,
+          "known_input_tokens": 71056,
+          "known_output_tokens": 3294,
+          "model_calls": 17,
+          "tool_calls": 17
+        },
+        "wall_seconds": 113.93512783298502,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "deepseek/deepseek-chat",
+        "observability": "google/gemini-2.5-flash-lite",
+        "dependency": "deepseek/deepseek-chat",
+        "reasoning": "deepseek/deepseek-r1-0528",
+        "critic": "deepseek/deepseek-chat",
+        "reporting": "deepseek/deepseek-chat"
+      },
+      "historical_source": "paid-runs/1f96ab93-906e-4d57-8e7a-b31bd0d80aa2"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "traffic_overload",
+      "run_id": "bf6ce13b-90f3-4237-af6a-a56eda7f477c",
+      "verdict": "inconclusive",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "deployment regression",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": true,
+        "facts": true,
+        "assumptions": true,
+        "recommendations": true,
+        "unresolved_objection_ids": true
+      },
+      "report_completeness": {
+        "summary": true,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": true,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 0,
+        "invalid_outputs": 2,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "orchestrator"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "orchestrator: invalid output: initial plan must gather with both specialist roles",
+        "budget_exhausted": false,
+        "execution_status": "completed"
+      },
+      "resources": {
+        "totals": {
+          "cost": 0.00104547,
+          "input_tokens": 2124,
+          "output_tokens": 411,
+          "known_cost": 0.00104547,
+          "known_input_tokens": 2124,
+          "known_output_tokens": 411,
+          "model_calls": 3,
+          "tool_calls": 0
+        },
+        "wall_seconds": 51.191679917043075,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "deepseek/deepseek-chat",
+        "observability": "google/gemini-2.5-flash-lite",
+        "dependency": "deepseek/deepseek-chat",
+        "reasoning": "deepseek/deepseek-r1-0528",
+        "critic": "deepseek/deepseek-chat",
+        "reporting": "deepseek/deepseek-chat"
+      },
+      "historical_source": "paid-runs/bf6ce13b-90f3-4237-af6a-a56eda7f477c"
+    },
+    {
+      "grader_version": "grader.v1",
+      "expectation_version": "lab.v1",
+      "family": "deployment_regression",
+      "run_id": "e01f9051-6c32-48df-8ca5-8dc7969bcfc8",
+      "verdict": "no_report",
+      "diagnosis_checks": {
+        "culprit_service": false,
+        "mechanism": false,
+        "key_evidence_cited": false
+      },
+      "grounding": {
+        "hypothesis_claim_fraction": null,
+        "key_evidence_retrieved": false,
+        "key_evidence_cited": false,
+        "semantic_support": "human review required"
+      },
+      "citations": {
+        "count": 0,
+        "observation_fraction": null,
+        "unknown": [],
+        "receipt_only": []
+      },
+      "alternatives": [
+        {
+          "alternative": "database contention",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        },
+        {
+          "alternative": "traffic overload",
+          "ranked_first": false,
+          "mentioned_in_report": false,
+          "explicitly_ruled_out_in_report": false,
+          "ranked_down": false,
+          "contradicted": false
+        }
+      ],
+      "report_fields_present": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "report_completeness": {
+        "summary": false,
+        "facts": false,
+        "assumptions": false,
+        "recommendations": false,
+        "unresolved_objection_ids": false
+      },
+      "process": {
+        "repeated_queries": 4,
+        "invalid_outputs": 1,
+        "repaired_outputs": 0,
+        "failed_roles": [
+          "reasoning",
+          "reporting"
+        ],
+        "unresolved_objections": [],
+        "stop_reason": "reporting: TimeoutError: ",
+        "budget_exhausted": false,
+        "execution_status": "failed"
+      },
+      "resources": {
+        "totals": {
+          "cost": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "known_cost": 0.013911509999999998,
+          "known_input_tokens": 48978,
+          "known_output_tokens": 2265,
+          "model_calls": 17,
+          "tool_calls": 11
+        },
+        "wall_seconds": 187.90924445801647,
+        "latency_note": "trace span; per-role latency is summed call duration"
+      },
+      "models": {
+        "orchestrator": "deepseek/deepseek-chat",
+        "observability": "google/gemini-2.5-flash-lite",
+        "dependency": "deepseek/deepseek-chat",
+        "reasoning": "deepseek/deepseek-r1-0528",
+        "critic": "deepseek/deepseek-chat",
+        "reporting": "deepseek/deepseek-chat"
+      },
+      "historical_source": "paid-runs/e01f9051-6c32-48df-8ca5-8dc7969bcfc8"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "version": "lab.v1",
+  "family": "traffic_overload",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "worker|concurrency|capacity",
+    "saturat|overload"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "concurrency saturated"
+        },
+        "attributes.active_requests": {
+          "gte": 64
+        }
+      }
+    }
+  ],
+  "wrong_alternatives": [
+    "database contention",
+    "deployment regression"
+  ],
+  "precision": "Local lab fault signature only; no unsupported deeper causal precision."
+}
