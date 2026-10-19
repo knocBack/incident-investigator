@@ -259,7 +259,7 @@ class Investigation:
             if (
                 "kind" in value
                 and value["kind"] in {"observation", "tool_receipt"}
-                and value["id"] not in allowed
+                and value.get("id") not in allowed
             ):
                 raise ValueError("unknown or invisible evidence reference")
             for key, item in value.items():

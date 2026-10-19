@@ -423,3 +423,38 @@ async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
     assert result["state"]["rounds"] == 3
     assert result["state"]["no_progress"] == 2
     assert result["state"]["dispositions"]["o1"]["outcome"] == "unresolved"
+
+
+async def test_missing_reference_id_gets_one_correction_without_controller_crash(tmp_path):
+    class MalformedOutput(Scenario):
+        injected = False
+
+        async def complete(self, messages, schema):
+            response = await super().complete(messages, schema)
+            context = json.loads(messages[1]["content"])
+            if (
+                context["role"] == "observability"
+                and response.action["kind"] == "final"
+                and not self.injected
+            ):
+                response.action["result"]["outputs"] = {"kind": "observation"}
+                self.injected = True
+            return response
+
+    directory = await investigate(
+        load_snapshot("dev-00"), MalformedOutput(followup=False), tmp_path
+    )
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    task = next(t for t in result["state"]["tasks"].values() if t["role"] == "observability")
+    assert task["status"] == "succeeded"
+    assert task["corrections"] == 1
+    assert task["result"]["outputs"] == {}
+    events = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    rejections = [
+        event
+        for event in events
+        if event["event"] == "validation" and event["outcome"] == "rejected"
+    ]
+    assert len(rejections) == 1
+    assert rejections[0]["error"] == "unknown or invisible evidence reference"
