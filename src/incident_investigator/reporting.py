@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from incident_investigator.contracts import PAYLOADS
+from incident_investigator.graph_config import recorded_graph
 from incident_investigator.sources.loader import CaseSnapshot
 
 
@@ -39,6 +40,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "schema_version": "m3.v1",
         "run_id": c["run_id"],
         "case_id": c["case_id"],
+        "graph": recorded_graph(c.get("graph")),
         "dataset_digest": snapshot.dataset_digest,
         "revision": c["revision"],
         "status": c["status"],

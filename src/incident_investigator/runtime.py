@@ -1,4 +1,4 @@
-"""Bounded six-role graph: serialized ownership, parallel single-call workers."""
+"""Shared bounded investigation runtime; the staged workflow is the default."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from typing import Annotated, Any, Literal, TypedDict
 from uuid import uuid4
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from incident_investigator.contracts import (
@@ -26,6 +24,7 @@ from incident_investigator.contracts import (
     Role,
     action_type,
 )
+from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
 from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
 from incident_investigator.repair import (
     Repairs,
@@ -91,6 +90,7 @@ class Control(Record):
     run_id: str
     case_id: str
     limits: Limits
+    graph: GraphVariant = DEFAULT_GRAPH
     revision: int = 0
     status: Literal["running", "completed", "failed", "resource_exhausted"] = "running"
     stop_reason: str | None = None
@@ -197,17 +197,27 @@ class Investigation:
         semaphore: asyncio.Semaphore,
         *,
         faults: dict[str, FaultSelection] | None = None,
+        graph: GraphVariant = DEFAULT_GRAPH,
     ) -> None:
+        if graph not in {"staged", "hub"}:
+            raise ValueError(f"unknown graph: {graph}")
         self.snapshot, self.model, self.out, self.limits = snapshot, model, out, limits
         self.semaphore = semaphore
         self.registry = build_registry(snapshot)
         self.faults = faults or {}
+        self.variant = graph
         self.started = time.monotonic()
         self.deadline = self.started + limits.wall_seconds
         self.adapters = {role: TypeAdapter(action_type(body)) for role, body in PAYLOADS.items()}
 
     def trace(self, event: str, **values: Any) -> None:
-        row = {"run_id": self.out.name, "event": event, "at": time.time(), **values}
+        row = {
+            "run_id": self.out.name,
+            "graph": self.variant,
+            "event": event,
+            "at": time.time(),
+            **values,
+        }
         row.setdefault("task_id", None)
         row.setdefault("attempt_id", None)
         row.setdefault("call_id", None)
@@ -655,56 +665,43 @@ class Investigation:
             )
         ]
 
-    def advance(self, c: Control) -> None:
-        tasks = [c.tasks[key] for key in c.batch]
-        if any(task.status == "running" for task in tasks):
-            return
-        if c.stage != "gathering" and tasks[0].status != "succeeded":
-            reason = f"{tasks[0].role}: {tasks[0].failure}"
-            if c.stage == "reporting":
-                self.close(c, "failed", reason)
-            else:
-                self.report(c, partial_reason=reason)
-            return
-        if c.stage in {"plan", "decide"}:
-            plan = Plan.model_validate(tasks[0].result)
-            for disposition in plan.dispositions:
-                c.dispositions[disposition.objection_id] = disposition.model_dump()
-            if plan.route == "report" or c.no_progress >= c.limits.max_no_progress_rounds:
-                self.report(c)
-            else:
-                self.round(c, plan)
-        elif c.stage == "gathering":
-            self.reason(c)
-        elif c.stage == "reasoning":
-            c.hypothesis_revision = tasks[0].task_id
-            c.stage = "critic"
-            c.batch = [
-                self.task(
-                    c,
-                    "critic",
-                    "Review this exact hypothesis revision. Raise concrete objections and useful evidence questions, or return an empty objections list.",
-                )
-            ]
-        elif c.stage == "critic":
-            c.review_task = tasks[0].task_id
-            for objection in tasks[0].result["objections"]:
-                c.objections[objection["objection_id"]] = objection
-            progress = len(c.evidence) + len(c.coverage) > c.progress_before
-            c.no_progress = 0 if progress else c.no_progress + 1
-            if c.objections:
-                c.stage = "decide"
-                c.batch = [
-                    self.task(
-                        c,
-                        "orchestrator",
-                        "Dispose EVERY recorded objection: targeted gathering, reviewed reanalysis, or explicit unresolved with reason. Report if no useful work remains.",
-                    )
-                ]
-            else:
-                self.report(c)
-        elif c.stage == "reporting":
-            c.status = "completed"
+    def plan(self, c: Control) -> None:
+        c.stage = "plan"
+        c.batch = [
+            self.task(
+                c,
+                "orchestrator",
+                "Plan initial independent Observability and Dependency assignments for this alert. Include both roles.",
+            )
+        ]
+
+    def review(self, c: Control) -> None:
+        c.hypothesis_revision = c.batch[0]
+        c.stage = "critic"
+        c.batch = [
+            self.task(
+                c,
+                "critic",
+                "Review this exact hypothesis revision. Raise concrete objections and useful evidence questions, or return an empty objections list.",
+            )
+        ]
+
+    def accept_review(self, c: Control) -> None:
+        c.review_task = c.batch[0]
+        for objection in c.tasks[c.review_task].result["objections"]:
+            c.objections[objection["objection_id"]] = objection
+        progress = len(c.evidence) + len(c.coverage) > c.progress_before
+        c.no_progress = 0 if progress else c.no_progress + 1
+
+    def decide(self, c: Control) -> None:
+        c.stage = "decide"
+        c.batch = [
+            self.task(
+                c,
+                "orchestrator",
+                "Dispose EVERY recorded objection: targeted gathering, reviewed reanalysis, or explicit unresolved with reason. Report if no useful work remains.",
+            )
+        ]
 
     def dispatch_tools(self, c: Control, task: Task) -> None:
         """Admit new queries; answer identical normalized queries from earlier receipts."""
@@ -759,7 +756,8 @@ class Investigation:
             tool=request["name"],
         )
 
-    async def controller(self, state: GraphState) -> dict:
+    def receive(self, state: GraphState) -> Control:
+        """The shared authoritative receipt commit and deadline check."""
         c = Control.model_validate(state["control"])
         c.dispatch = []
         for call_id, receipt in state.get("inbox", {}).items():
@@ -770,34 +768,22 @@ class Investigation:
                 self.accept(c, c.calls[call_id], receipt)
         if c.status == "running" and time.monotonic() >= self.deadline:
             self.close(c, "resource_exhausted", "wall time limit")
-        # A task can settle at admission (allowance spent) with nothing dispatched; advance
-        # again so the graph never stops while running. Each pass settles or dispatches work.
-        for _ in range(8):
+        return c
+
+    def schedule(self, c: Control) -> None:
+        """Reserve calls serially before parallel workers execute them."""
+        for task_id in c.batch:
             if c.status != "running":
                 break
-            if c.stage == "start":
-                c.stage = "plan"
-                c.batch = [
-                    self.task(
-                        c,
-                        "orchestrator",
-                        "Plan initial independent Observability and Dependency assignments for this alert. Include both roles.",
-                    )
-                ]
-            else:
-                self.advance(c)
-            for task_id in c.batch:
-                if c.status != "running":
-                    break
-                task = c.tasks[task_id]
-                if task.status != "running" or task.pending:
-                    continue
-                if task.phase == "tools":
-                    self.dispatch_tools(c, task)
-                if task.phase == "model" and task.status == "running" and not task.pending:
-                    self.admit(c, task, "model", {"messages": task.messages})
-            if c.dispatch:
-                break
+            task = c.tasks[task_id]
+            if task.status != "running" or task.pending:
+                continue
+            if task.phase == "tools":
+                self.dispatch_tools(c, task)
+            if task.phase == "model" and task.status == "running" and not task.pending:
+                self.admit(c, task, "model", {"messages": task.messages})
+
+    def checkpoint(self, c: Control) -> dict:
         if c.status != "running":
             c.dispatch = []
         c.revision += 1
@@ -884,29 +870,14 @@ class Investigation:
         return {"inbox": {call.call_id: receipt}}
 
     def graph(self):
-        graph = StateGraph(GraphState)
-        graph.add_node("controller", self.controller)
-        for role in PAYLOADS:
-            graph.add_node(role, self.execute)
-            graph.add_edge(role, "controller")
-        graph.add_node("tool", self.execute)
-        graph.add_edge("tool", "controller")
-        graph.add_edge(START, "controller")
+        """Build the staged workflow by default; hub is a deprecated opt-in."""
+        if self.variant == "hub":
+            from incident_investigator.hub import build_hub_graph
 
-        def route(state):
-            c = state["control"]
-            if c["status"] != "running":
-                return END
-            return [
-                Send(
-                    c["calls"][key]["role"] if c["calls"][key]["kind"] == "model" else "tool",
-                    {"call": c["calls"][key]},
-                )
-                for key in c["dispatch"]
-            ]
+            return build_hub_graph(self)
+        from incident_investigator.staged import build_staged_graph
 
-        graph.add_conditional_edges("controller", route)
-        return graph
+        return build_staged_graph(self)
 
 
 async def investigate(
@@ -917,16 +888,25 @@ async def investigate(
     limits: Limits | None = None,
     semaphore: asyncio.Semaphore | None = None,
     faults: dict[str, FaultSelection] | None = None,
+    graph: GraphVariant = DEFAULT_GRAPH,
 ) -> Path:
     """Run one fresh investigation. Each run owns its graph, files and fault counters."""
     from incident_investigator.reporting import export_report
 
+    if graph not in {"hub", "staged"}:
+        raise ValueError(f"unknown graph: {graph}")
     limits = limits or Limits()
     run_id = identity()
     run_dir = out / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     runner = Investigation(
-        snapshot, model, run_dir, limits, semaphore or asyncio.Semaphore(4), faults=faults
+        snapshot,
+        model,
+        run_dir,
+        limits,
+        semaphore or asyncio.Semaphore(4),
+        faults=faults,
+        graph=graph,
     )
     resolve_model = getattr(model, "model_for_role", None)
     models = {
@@ -941,7 +921,9 @@ async def investigate(
         )
         for role in PAYLOADS
     }
-    initial = Control(run_id=run_id, case_id=snapshot.case_id, limits=limits, models=models)
+    initial = Control(
+        run_id=run_id, case_id=snapshot.case_id, limits=limits, models=models, graph=graph
+    )
     async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
         graph = runner.graph().compile(checkpointer=saver)
         # callbacks=[] alone cannot override LANGSMITH_TRACING inherited by native tools.

@@ -86,6 +86,12 @@ Generic `{{context.<key>}}` substitutions bind runtime identities in replay data
 `--source <manifest-root>` selects other explicitly registered frozen cases.
 Repeated `--case` runs concurrently with independent state and fault counters.
 
+Investigations, demos, and evaluation suites use the `staged` graph by default.
+Its stage nodes and conditional edges expose the investigation workflow. The previous
+controller graph is available only with `--graph hub`: deprecated; removed if final
+evaluation shows no difference. Results, traces, batch metadata and leaderboard rows
+record the selected graph. See [graph variants and compiled diagrams](docs/graph.md).
+
 Each fresh UUID directory contains `report.md`, `result.json`, `trace.jsonl`, and
 `state.sqlite`. Reports preserve ranked support/contradictions, facts/assumptions,
 verification recommendations, unresolved objections, gaps, and all six roles'

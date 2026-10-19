@@ -197,6 +197,7 @@ def read_result(directory):
     return json.loads((directory / "result.json").read_text())
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_e2e_parallel_followup_and_grounded_report(tmp_path):
     model = Scenario()
     directory = await investigate(load_snapshot("dev-00"), model, tmp_path)
@@ -254,6 +255,7 @@ async def test_e2e_parallel_followup_and_grounded_report(tmp_path):
     assert all(row["run_id"] == directory.name for row in trace)
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_runaway_stops_with_partial_report(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"), Scenario(runaway=True), tmp_path, limits=Limits(max_model_calls=7)
@@ -265,6 +267,7 @@ async def test_runaway_stops_with_partial_report(tmp_path):
     assert "Stop reason" in (directory / "report.md").read_text()
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_timeout_is_a_gap_and_other_specialist_survives(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"),
@@ -283,6 +286,7 @@ async def test_timeout_is_a_gap_and_other_specialist_survives(tmp_path):
     assert "Gap:" in (directory / "report.md").read_text()
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_concurrent_runs_are_isolated(tmp_path):
     first, second = await asyncio.gather(
         *[
@@ -298,6 +302,7 @@ async def test_concurrent_runs_are_isolated(tmp_path):
     assert a["usage"] != {} and b["usage"] != {}
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_unknown_ids_receive_one_correction_then_specialist_settles(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"), Scenario(followup=False, invalid=True), tmp_path
@@ -367,6 +372,7 @@ def test_provider_schemas_keep_tool_arguments_and_root_references():
     )
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_inprocess_lab_demo_scripted(tmp_path):
     from argparse import Namespace
     from pathlib import Path
@@ -387,6 +393,7 @@ async def test_inprocess_lab_demo_scripted(tmp_path):
     assert any(row["source"] == "metrics" for row in result["state"]["evidence"].values())
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_wall_deadline_retains_partial_summary(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"), Scenario(), tmp_path, limits=Limits(wall_seconds=0.001)
@@ -396,6 +403,7 @@ async def test_wall_deadline_retains_partial_summary(tmp_path):
     assert result["completeness"] == "partial"
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
     class RepeatedGathering(Scenario):
         async def complete(self, messages, schema):
@@ -429,6 +437,7 @@ async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
     assert next(iter(result["state"]["dispositions"].values()))["outcome"] == "unresolved"
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_reference_missing_id_is_dropped_and_claim_kept(tmp_path):
     class MalformedOutput(Scenario):
         injected = False
@@ -465,6 +474,7 @@ async def test_reference_missing_id_is_dropped_and_claim_kept(tmp_path):
     assert result["repairs"]["observability"] == 1
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_review_round_limit_reports_and_orchestrator_sees_budget(tmp_path):
     model = Scenario()
     directory = await investigate(
@@ -483,6 +493,7 @@ async def test_review_round_limit_reports_and_orchestrator_sees_budget(tmp_path)
     assert [(c["rounds"], c["max_review_rounds"]) for c in contexts] == [(0, 1), (1, 1)]
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_reused_model_labels_get_distinct_runtime_ids(tmp_path):
     from uuid import UUID
 
@@ -553,6 +564,7 @@ async def test_waiting_for_slot_does_not_consume_call_timeout(tmp_path):
     assert len(model.requests) == 1
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_context_receipts_keep_ids_without_repeated_observations(tmp_path):
     model = Scenario(followup=False)
     directory = await investigate(load_snapshot("dev-00"), model, tmp_path)
@@ -575,6 +587,7 @@ async def test_context_receipts_keep_ids_without_repeated_observations(tmp_path)
 
 
 @pytest.mark.parametrize("support", ["empty_hypotheses", "empty_support", "receipt_only"])
+@pytest.mark.usefixtures("runtime_graph")
 async def test_likely_cause_requires_supporting_observation(tmp_path, support):
     class UnsupportedCause(Scenario):
         async def complete(self, messages, schema):
@@ -607,6 +620,7 @@ async def test_likely_cause_requires_supporting_observation(tmp_path, support):
     )
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_report_evidence_counts_and_empty_sections(tmp_path):
     class CountedEvidence(Scenario):
         async def complete(self, messages, schema):
@@ -687,6 +701,7 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
 
 
 @pytest.mark.parametrize("decision_index", [0, 1])
+@pytest.mark.usefixtures("runtime_graph")
 async def test_live_demo_2_decisions_are_repaired_into_reports(tmp_path, decision_index):
     from pathlib import Path
 
@@ -748,6 +763,7 @@ async def test_live_demo_2_decisions_are_repaired_into_reports(tmp_path, decisio
     assert not any(e["event"] == "validation" and e["outcome"] == "rejected" for e in events)
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_duplicate_and_unknown_decision_references_repair_without_correction(tmp_path):
     class DuplicateDecision(Scenario):
         async def complete(self, messages, schema):
@@ -786,6 +802,7 @@ async def test_duplicate_and_unknown_decision_references_repair_without_correcti
 
 
 @pytest.mark.parametrize("failed_role", ["orchestrator", "critic", "reasoning", "decide"])
+@pytest.mark.usefixtures("runtime_graph")
 async def test_exhausted_control_step_still_runs_reporting(tmp_path, failed_role):
     class FailedControl(Scenario):
         async def complete(self, messages, schema):
@@ -811,6 +828,7 @@ async def test_exhausted_control_step_still_runs_reporting(tmp_path, failed_role
     assert len(failures) == 1 and failures[0]["corrections"] == 1
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_reporting_failure_remains_failed_with_partial_artifacts(tmp_path):
     class FailedReporting(Scenario):
         async def complete(self, messages, schema):
