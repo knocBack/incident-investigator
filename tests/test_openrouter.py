@@ -111,7 +111,7 @@ async def test_mandatory_or_unknown_reasoning_uses_provider_default(configured, 
 
 
 @pytest.mark.parametrize("code,retryable", [(401, False), (402, False), (429, True), (503, True)])
-async def test_http_failures_are_clear_redacted_and_not_retried(configured, code, retryable):
+async def test_http_failures_are_clear_redacted_and_retried_when_transient(configured, code, retryable):
     calls = 0
 
     def handler(request):
@@ -129,7 +129,7 @@ async def test_http_failures_are_clear_redacted_and_not_retried(configured, code
     assert exc.value.retryable is retryable
     assert f"OpenRouter HTTP {code}" in str(exc.value) and "provider detail" in str(exc.value)
     assert TEST_KEY not in str(exc.value)
-    assert calls == 1
+    assert calls == (3 if retryable else 1)
 
 
 async def test_embedded_429_is_retryable(configured):
@@ -144,6 +144,22 @@ async def test_embedded_429_is_retryable(configured):
     with pytest.raises(ModelCallError, match="free tier rate limit") as exc:
         await OpenRouterModel(transport=httpx.MockTransport(handler)).complete(messages(), {})
     assert exc.value.retryable
+
+
+async def test_429_retries_then_succeeds(configured):
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        if request.method == "GET":
+            return httpx.Response(200, json=catalogue())
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": {"code": 429}})
+        return httpx.Response(200, json=response())
+
+    result = await OpenRouterModel(transport=httpx.MockTransport(handler)).complete(messages(), {})
+    assert calls == 2 and result.usage.cost == 0.001
 
 
 async def test_hard_timeout_has_no_hidden_retry(configured):
@@ -237,7 +253,7 @@ async def test_mocked_api_investigation_records_role_models_cost_and_no_credenti
     assert len(calls) == 8
 
 
-@pytest.mark.parametrize("code,expected_calls", [(401, 2), (429, 4)])
+@pytest.mark.parametrize("code,expected_calls", [(401, 2), (429, 12)])
 async def test_runtime_owns_retry_policy_and_scrubs_provider_errors(
     configured, tmp_path, code, expected_calls
 ):

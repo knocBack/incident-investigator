@@ -203,8 +203,13 @@ paid calls):
 ```sh
 uv run incident-investigator eval-suite --faults all --model openrouter \
   --models organization/model --repeats 2 --budget-usd 0.50 \
-  --out evals/results/my-batch
+  --concurrency 2 --out evals/results/my-batch
 ```
+
+For a fast smoke batch, use `--quick`: it runs all five faults once with concurrency
+five. `--repeats` and `--concurrency` override those defaults. `--k` controls the
+leaderboard's pass@k and pass^k cap (default 4); each model/fault row reports n,
+correct, and both unbiased pass estimators.
 
 Each model runs every fault with fresh lab/model state. The batch records run order,
 prices, settings, all run artifacts, grades, rubric worksheets and a JSON/Markdown
@@ -213,7 +218,9 @@ usage before/after runs and reserves up to 64k prompt tokens (configurable with
 `--max-input-tokens`) plus 4096 output tokens with a 10% margin before every call.
 Cache and prompt rates are treated as alternative prompt-side rates, using the highest
 catalogue tier. The bounded adapter refuses an oversize prompt before sending it.
-Unknown-cost failures retain their reservation; provider price ceilings constrain
+Failures before any provider response (HTTP errors and connection failures) release
+their reservation. Unknown-cost responses and post-send timeouts retain it; a response
+generation id is looked up once for its final cost first. Provider price ceilings constrain
 routing. Unsupported billing dimensions and reservations that cannot fit are recorded
 as skipped attempts, while the batch continues with other models.
 Zero-price models work with a zero budget. Aggregate key usage can be delayed or

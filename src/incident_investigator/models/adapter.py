@@ -34,10 +34,18 @@ class ModelResult:
 class ModelCallError(RuntimeError):
     """Provider failure with an explicit runtime retry decision."""
 
-    def __init__(self, message: str, *, retryable: bool, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status: int | None = None,
+        before_response: bool = False,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
+        self.before_response = before_response
 
 
 class ModelAdapter(Protocol):
