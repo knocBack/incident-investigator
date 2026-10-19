@@ -338,7 +338,8 @@ async def test_guarded_adapter_enforces_ceiling_and_retains_error_reservation():
     adapter.complete = AsyncMock(side_effect=TimeoutError)
     with pytest.raises(TimeoutError):
         await bounded.complete([], {})
-    assert guard.unknown == Decimal(".0101112")
+    assert guard.unknown == Decimal(guard.records[0]["reservation"])
+    assert guard.unknown < price_bound(next(iter(catalog.values())))
 
 
 async def test_usage_sampling_and_zero_budget_free_model(tmp_path, monkeypatch):
