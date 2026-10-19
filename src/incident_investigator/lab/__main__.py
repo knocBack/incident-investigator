@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +32,8 @@ def snapshot(args: argparse.Namespace) -> None:
         if line.strip()
     ]
     selected = [item for item in observations if item.available_at <= cutoff]
+    if not selected:
+        print("warning: snapshot contains no observations at or before the cutoff", file=sys.stderr)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     alert = {

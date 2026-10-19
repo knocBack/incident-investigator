@@ -60,10 +60,10 @@ class Scenario(ScriptedModel):
             elif not context["dispositions"] and self.followup:
                 result = {
                     "route": "gather",
-                    "assignments": [assignment("dependency", "o1")],
+                    "assignments": [assignment("dependency", next(iter(context["objections"])))],
                     "dispositions": [
                         {
-                            "objection_id": "o1",
+                            "objection_id": next(iter(context["objections"])),
                             "outcome": "gather",
                             "reason": "Check an alternative",
                         }
@@ -106,7 +106,7 @@ class Scenario(ScriptedModel):
                             continue
                         refs.extend(
                             {"kind": "observation", "id": row["evidence_id"]}
-                            for row in (data.get("page") or {}).get("observations", [])
+                            for row in data.get("observations", [])
                         )
                 if self.invalid:
                     refs = [{"kind": "observation", "id": "invented-evidence"}]
@@ -151,7 +151,9 @@ class Scenario(ScriptedModel):
                     "objections": [
                         {
                             "objection_id": "o1",
-                            "hypothesis_id": "h1",
+                            "hypothesis_id": context["results"][context["hypothesis_revision"]][
+                                "result"
+                            ]["hypotheses"][0]["hypothesis_id"],
                             "question": "Could a change explain this?",
                             "evidence_ids": [],
                             "suggested_role": "dependency",
@@ -232,7 +234,7 @@ async def test_e2e_parallel_followup_and_grounded_report(tmp_path):
         "Per-role resource usage",
     ):
         assert section in text
-    assert "o1" in text
+    assert any(o["model_label"] == "o1" for o in result["state"]["objections"].values())
     assert set(result["usage"]) == {
         "orchestrator",
         "observability",
@@ -403,10 +405,12 @@ async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
                     final(
                         {
                             "route": "gather",
-                            "assignments": [assignment("dependency", "o1")],
+                            "assignments": [
+                                assignment("dependency", next(iter(context["objections"])))
+                            ],
                             "dispositions": [
                                 {
-                                    "objection_id": "o1",
+                                    "objection_id": next(iter(context["objections"])),
                                     "outcome": "gather",
                                     "reason": "Repeat the query",
                                 }
@@ -422,7 +426,7 @@ async def test_no_progress_closes_gathering_with_unresolved_objection(tmp_path):
     assert result["status"] == "completed"
     assert result["state"]["rounds"] == 3
     assert result["state"]["no_progress"] == 2
-    assert result["state"]["dispositions"]["o1"]["outcome"] == "unresolved"
+    assert next(iter(result["state"]["dispositions"].values()))["outcome"] == "unresolved"
 
 
 async def test_missing_reference_id_gets_one_correction_without_controller_crash(tmp_path):
@@ -458,3 +462,217 @@ async def test_missing_reference_id_gets_one_correction_without_controller_crash
     ]
     assert len(rejections) == 1
     assert rejections[0]["error"] == "unknown or invisible evidence reference"
+
+
+async def test_review_round_limit_reports_and_orchestrator_sees_budget(tmp_path):
+    model = Scenario()
+    directory = await investigate(
+        load_snapshot("dev-00"), model, tmp_path, limits=Limits(max_review_rounds=1)
+    )
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    assert result["state"]["rounds"] == 1
+    assert result["state"]["tasks"][result["state"]["report_task"]]["status"] == "succeeded"
+    assert all(d["outcome"] == "unresolved" for d in result["state"]["dispositions"].values())
+    contexts = [
+        json.loads(messages[1]["content"])
+        for messages, _ in model.requests
+        if json.loads(messages[1]["content"])["role"] == "orchestrator"
+    ]
+    assert [(c["rounds"], c["max_review_rounds"]) for c in contexts] == [(0, 1), (1, 1)]
+
+
+async def test_reused_model_labels_get_distinct_runtime_ids(tmp_path):
+    from uuid import UUID
+
+    class ReusedLabels(Scenario):
+        async def complete(self, messages, schema):
+            response = await super().complete(messages, schema)
+            context = json.loads(messages[1]["content"])
+            if context["role"] == "critic" and context["objections"]:
+                hypothesis = context["results"][context["hypothesis_revision"]]["result"][
+                    "hypotheses"
+                ][0]
+                response.action["result"]["objections"] = [
+                    {
+                        "objection_id": "o1",
+                        "hypothesis_id": hypothesis["hypothesis_id"],
+                        "question": "Still missing a causal check",
+                        "evidence_ids": [],
+                        "suggested_role": "dependency",
+                    }
+                ]
+            return response
+
+    directory = await investigate(load_snapshot("dev-00"), ReusedLabels(), tmp_path)
+    result = read_result(directory)
+    assert result["status"] == "completed"
+    objections = list(result["state"]["objections"].values())
+    hypotheses = [
+        h
+        for t in result["state"]["tasks"].values()
+        if t["role"] == "reasoning"
+        for h in t["result"]["hypotheses"]
+    ]
+    for items, id_field, label in (
+        (objections, "objection_id", "o1"),
+        (hypotheses, "hypothesis_id", "h1"),
+    ):
+        assert len(items) == 2
+        assert len({item[id_field] for item in items}) == 2
+        assert all(
+            item["model_label"] == label and str(UUID(item[id_field])) == item[id_field]
+            for item in items
+        )
+    assert set(result["state"]["dispositions"]) == {o["objection_id"] for o in objections}
+
+
+async def test_waiting_for_slot_does_not_consume_call_timeout(tmp_path):
+    from incident_investigator.runtime import Call, Investigation
+
+    slot = asyncio.Semaphore(0)
+    model = ScriptedModel([final({})])
+    runner = Investigation(
+        load_snapshot("dev-00"), model, tmp_path, Limits(call_seconds=0.01), slot
+    )
+    call = Call(
+        call_id="queued",
+        task_id="task",
+        attempt_id="attempt",
+        role="reasoning",
+        kind="model",
+        request={"messages": []},
+    )
+    pending = asyncio.create_task(runner.execute({"call": call.model_dump()}))
+    await asyncio.sleep(0.03)
+    assert not pending.done()
+    slot.release()
+    result = await pending
+    assert result["inbox"]["queued"]["error"] is None
+    assert len(model.requests) == 1
+
+
+async def test_context_receipts_keep_ids_without_repeated_observations(tmp_path):
+    model = Scenario(followup=False)
+    directory = await investigate(load_snapshot("dev-00"), model, tmp_path)
+    result = read_result(directory)
+    reasoning = next(
+        json.loads(messages[1]["content"])
+        for messages, _ in model.requests
+        if json.loads(messages[1]["content"])["role"] == "reasoning"
+    )
+    assert reasoning["evidence"]
+    for receipt in reasoning["tool_receipts"].values():
+        page = receipt["page"]
+        assert "observations" not in page
+        assert set(page["observation_ids"]) <= set(reasoning["evidence"])
+    assert any(
+        row.get("payload", {}).get("observations")
+        for row in result["receipts"].values()
+        if isinstance(row.get("payload"), dict)
+    )
+
+
+@pytest.mark.parametrize("support", ["empty_hypotheses", "empty_support", "receipt_only"])
+async def test_likely_cause_requires_supporting_observation(tmp_path, support):
+    class UnsupportedCause(Scenario):
+        async def complete(self, messages, schema):
+            response = await super().complete(messages, schema)
+            context = json.loads(messages[1]["content"])
+            if context["role"] == "reasoning":
+                body = response.action["result"]
+                body["conclusion"] = "likely_cause"
+                if support == "empty_hypotheses":
+                    body["hypotheses"] = []
+                else:
+                    body["hypotheses"][0]["supporting_evidence"] = (
+                        [next(iter(context["tool_receipts"]))] if support == "receipt_only" else []
+                    )
+            return response
+
+    directory = await investigate(
+        load_snapshot("dev-00"), UnsupportedCause(followup=False), tmp_path
+    )
+    result = read_result(directory)
+    assert result["status"] == "failed"
+    task = next(t for t in result["state"]["tasks"].values() if t["role"] == "reasoning")
+    assert task["corrections"] == 1
+    assert "supported by an observation" in task["failure"]
+
+
+async def test_report_evidence_counts_and_empty_sections(tmp_path):
+    class CountedEvidence(Scenario):
+        async def complete(self, messages, schema):
+            response = await super().complete(messages, schema)
+            context = json.loads(messages[1]["content"])
+            if context["role"] == "reasoning":
+                hypothesis = response.action["result"]["hypotheses"][0]
+                hypothesis["supporting_evidence"] = list(context["evidence"])[:2]
+                hypothesis["contradicting_evidence"] = []
+            return response
+
+    directory = await investigate(
+        load_snapshot("dev-00"), CountedEvidence(followup=False), tmp_path
+    )
+    text = (directory / "report.md").read_text()
+    assert "### Supporting evidence (2)" in text
+    assert "### Contradicting evidence (0)" in text
+    # A separate empty replay has explicit prose in each empty section.
+    from pathlib import Path
+
+    actions = json.loads(Path("tests/scripted-demo.json").read_text())
+    empty = await investigate(load_snapshot("dev-00"), ScriptedModel(actions), tmp_path)
+    text = (empty / "report.md").read_text()
+    assert "## Facts\n\nNone recorded." in text
+    assert "\n{}\n" not in text
+    assert "Proposed actions only; this investigation applies no fixes.\n\nNone recorded." in text
+
+
+@pytest.mark.parametrize("expected_status", ["failed", "resource_exhausted"])
+def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, expected_status):
+    from incident_investigator import cli
+
+    async def bounded_investigate(snapshot, model, out, **kwargs):
+        limits = Limits(max_model_calls=1) if expected_status == "resource_exhausted" else Limits()
+        return await investigate(snapshot, model, out, limits=limits, **kwargs)
+
+    monkeypatch.setattr(cli, "investigate", bounded_investigate)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "incident-investigator",
+            "investigate",
+            "--case",
+            "dev-00",
+            "--model",
+            "scripted",
+            "--out",
+            str(tmp_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    from pathlib import Path
+
+    report = Path(capsys.readouterr().out.strip())
+    assert report.is_file()
+    result = read_result(report.parent)
+    assert result["status"] == expected_status
+    assert (report.parent / "trace.jsonl").is_file()
+
+
+def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkeypatch, capsys):
+    from incident_investigator import cli
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["incident-investigator", "investigate", "--case", "missing", "--out", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    error = capsys.readouterr().err
+    assert "unknown case ID: missing" in error
+    assert "Traceback" not in error
+    assert not list(tmp_path.iterdir())

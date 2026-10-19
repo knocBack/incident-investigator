@@ -93,6 +93,8 @@ class CodexExecModel:
             "--disable",
             "shell_tool",
             "--disable",
+            "view_image",
+            "--disable",
             "unified_exec",
             "-c",
             'web_search="disabled"',
@@ -116,7 +118,9 @@ class CodexExecModel:
         self, messages: Sequence[Mapping[str, Any]], schema: dict[str, Any]
     ) -> ModelResult:
         if shutil.which(self.executable) is None:
-            raise RuntimeError("Codex CLI is unavailable; install `codex` or use II_MODEL=scripted")
+            raise RuntimeError(
+                "Codex CLI is unavailable; install `codex` or use --model scripted --script <actions.json>"
+            )
         prompt = json.dumps({"messages": list(messages)}, ensure_ascii=False)
         with tempfile.TemporaryDirectory(prefix="ii-codex-") as directory:
             sandbox = Path(directory)

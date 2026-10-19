@@ -59,20 +59,22 @@ async def demo(args) -> Path:
             return await investigate(load_snapshot("lab-demo", source_root), model(args), args.out)
 
 
-async def run(args) -> None:
+async def run(args) -> int:
     if args.command == "demo":
-        print((await demo(args)) / "report.md")
+        runs = [await demo(args)]
     else:
         semaphore = asyncio.Semaphore(4)
         roots = args.source or Path("fixtures/dev-00")
+        snapshots = [load_snapshot(case, roots) for case in args.case]
         runs = await asyncio.gather(
-            *[
-                investigate(load_snapshot(case, roots), model(args), args.out, semaphore=semaphore)
-                for case in args.case
-            ]
+            *[investigate(case, model(args), args.out, semaphore=semaphore) for case in snapshots]
         )
-        for directory in runs:
-            print(directory / "report.md")
+    failed = False
+    for directory in runs:
+        print(directory / "report.md")
+        result = json.loads((directory / "result.json").read_text())
+        failed |= result["status"] in {"failed", "resource_exhausted"}
+    return 1 if failed else 0
 
 
 def main() -> None:
@@ -128,7 +130,12 @@ def main() -> None:
         )
         print((args.run_dir / "report.md").read_text())
     else:
-        asyncio.run(run(args))
+        try:
+            status = asyncio.run(run(args))
+        except (ValueError, OSError) as exc:
+            parser.exit(2, f"incident-investigator: {exc}\n")
+        if status:
+            raise SystemExit(status)
 
 
 if __name__ == "__main__":

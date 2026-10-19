@@ -15,12 +15,30 @@ source. It does not access the live lab or produce a diagnosis.
 
 ## Run the lab
 
+Start a fresh lab in one terminal, with a fresh telemetry file:
+
 ```sh
-uv run python -m incident_investigator.lab serve --telemetry telemetry.jsonl
-uv run python -m incident_investigator.lab load --rps 10 --duration 30
-uv run python -m incident_investigator.lab fault set bad_configuration
-uv run python -m incident_investigator.lab snapshot --case dev-00 --cutoff 2026-01-01T00:01:00Z --service inventory --symptoms timeouts --out fixtures/dev-00
+LAB_DEMO_DIR=$(mktemp -d)
+echo "$LAB_DEMO_DIR"
+uv run python -m incident_investigator.lab serve --telemetry "$LAB_DEMO_DIR/telemetry.jsonl"
 ```
+
+In a second terminal, set `LAB_DEMO_DIR` to the printed directory, then run:
+
+```sh
+export LAB_DEMO_DIR=/path/printed/by/the/first/terminal
+uv run python -m incident_investigator.lab load --rps 5 --duration 2
+uv run python -m incident_investigator.lab fault set bad_configuration
+uv run python -m incident_investigator.lab load --rps 5 --duration 2
+LAB_CUTOFF=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+uv run python -m incident_investigator.lab snapshot --case manual-demo --cutoff "$LAB_CUTOFF" --service inventory --symptoms timeouts --telemetry "$LAB_DEMO_DIR/telemetry.jsonl" --out "$LAB_DEMO_DIR/case"
+uv run incident-investigator investigate --case manual-demo --source "$LAB_DEMO_DIR/case" --model scripted --script tests/scripted-demo.json --out runs/
+```
+
+The baseline uses about ten of the lab's 100 inventory units. Load runs again
+after fault injection. The snapshot uses the current UTC cutoff and a separate
+directory; keep `fixtures/dev-00` intact. An empty snapshot emits a warning.
+The scripted replay demonstrates coordination; use `--model codex` for diagnosis.
 
 ## Quickstart
 
@@ -68,7 +86,8 @@ Repeated `--case` runs concurrently with independent state and fault counters.
 Each fresh UUID directory contains `report.md`, `result.json`, `trace.jsonl`, and
 `state.sqlite`. Reports preserve ranked support/contradictions, facts/assumptions,
 verification recommendations, unresolved objections, gaps, and all six roles'
-usage. Unknown token counts remain `unknown`; known subtotals remain available in
+usage. Failed or resource-exhausted investigations exit nonzero after writing artifacts.
+Input errors print a concise message and create no run. Unknown token counts remain `unknown`; known subtotals remain available in
 JSON. Recommendations never mean a fix was applied. Limits produce partial
 reports; inconclusive is a valid diagnosis. `inspect` only reads local exports.
 SQLite checkpoints retain admission/receipts/acceptance, but public resume and
@@ -77,7 +96,7 @@ are specified in [LLD-03](docs/lld-03-roles.md). This is not a recovery guarante
 LangSmith tracing is explicitly disabled; traces and artifacts remain local.
 
 Codex isolation: the installed `codex exec --help` and `codex features list`
-expose `--disable shell_tool` and `--disable unified_exec`; both are applied,
+expose `--disable shell_tool`, `--disable unified_exec`, and `--disable view_image`; all are applied,
 with web search disabled, user config/rules ignored, an empty temporary working
 directory, and a read-only sandbox. The JSON event stream is checked and the call
 fails if any command/tool/function/web/file-change execution event appears. See

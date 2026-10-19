@@ -78,7 +78,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
             ("Supporting evidence", "supporting_evidence"),
             ("Contradicting evidence", "contradicting_evidence"),
         ):
-            lines += ["", f"### {title} ({index})", ""]
+            lines += ["", f"### {title} ({len(hypothesis[field])})", ""]
             lines += [f"- {citation(key)}" for key in hypothesis[field]] or ["None recorded."]
         if hypothesis["assumptions"]:
             lines += ["", "Assumptions: " + "; ".join(hypothesis["assumptions"])]
@@ -98,6 +98,8 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
     for fact in report.get("facts", []):
         lines += [f"- {fact['statement']}"]
         lines += [f"  - {citation(ref['id'])}" for ref in fact["references"]]
+    if not report.get("facts"):
+        lines += ["None recorded."]
     lines += ["", "## Assumptions", ""]
     lines += [f"- {item}" for item in report.get("assumptions", [])] or ["None recorded."]
     lines += [
@@ -110,6 +112,8 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
     for item in report.get("recommendations", []):
         lines += [f"- {item['action']} Verification: {item['verification']}"]
         lines += [f"  - {citation(key)}" for key in item["evidence_ids"]]
+    if not report.get("recommendations"):
+        lines += ["None recorded."]
     lines += ["", "## Open and unresolved objections", ""]
     for key, objection in c["objections"].items():
         lines += [

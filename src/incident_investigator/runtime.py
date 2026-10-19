@@ -218,6 +218,11 @@ class Investigation:
             "tool_receipts": control.tool_receipts,
             "objections": control.objections,
             "dispositions": control.dispositions,
+            **(
+                {"rounds": control.rounds, "max_review_rounds": control.limits.max_review_rounds}
+                if role == "orchestrator"
+                else {}
+            ),
             "tools": {
                 name: QUERY_MODELS[name].model_json_schema()
                 for name in ALLOWED_TOOLS.get(role, set())
@@ -307,18 +312,21 @@ class Investigation:
             if (plan.route == "gather") != bool(plan.assignments):
                 raise ValueError("only gathering can carry assignments")
         elif task.role == "reasoning":
-            ids = [h["hypothesis_id"] for h in result["hypotheses"]]
-            if len(ids) != len(set(ids)):
-                raise ValueError("duplicate hypothesis identity")
+            if result["conclusion"] == "likely_cause" and (
+                not result["hypotheses"]
+                or not any(
+                    key in c.evidence for key in result["hypotheses"][0]["supporting_evidence"]
+                )
+            ):
+                raise ValueError(
+                    "likely_cause requires a top hypothesis supported by an observation"
+                )
         elif task.role in {"critic", "reporting"}:
             if result["revision_id"] != c.hypothesis_revision:
                 raise ValueError("wrong hypothesis revision")
             if task.role == "critic":
                 hypotheses = c.tasks[c.hypothesis_revision].result["hypotheses"]
                 known = {h["hypothesis_id"] for h in hypotheses}
-                ids = [o["objection_id"] for o in result["objections"]]
-                if len(ids) != len(set(ids)) or any(key in c.objections for key in ids):
-                    raise ValueError("objection IDs must be new and unique")
                 if any(
                     o["hypothesis_id"] is not None and o["hypothesis_id"] not in known
                     for o in result["objections"]
@@ -441,17 +449,30 @@ class Investigation:
                     and page.query_key not in c.coverage
                 ):
                     c.coverage.append(page.query_key)
+            # Retain full pages in raw receipts and canonical evidence, not twice in context.
+            summary = (
+                {key: value for key, value in payload.items() if key != "observations"}
+                if payload
+                else None
+            )
+            observations = payload["observations"] if payload else []
+            if summary is not None:
+                summary["observation_ids"] = [row["evidence_id"] for row in observations]
             c.tool_receipts[call.call_id] = {
                 "tool": call.request["name"],
                 "error": receipt.get("error"),
-                "page": payload,
+                "page": summary,
             }
             task.visible_refs.append(call.call_id)
             task.messages.append(
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {"tool_receipt_id": call.call_id, **c.tool_receipts[call.call_id]}
+                        {
+                            "tool_receipt_id": call.call_id,
+                            **c.tool_receipts[call.call_id],
+                            "observations": observations,
+                        }
                     ),
                 }
             )
@@ -473,6 +494,15 @@ class Investigation:
                 task.phase = "tools"
             else:
                 self.validate_result(c, task, data["result"])
+                # Model IDs are labels only; authoritative identities are runtime allocated.
+                field = {
+                    "reasoning": ("hypotheses", "hypothesis_id"),
+                    "critic": ("objections", "objection_id"),
+                }.get(task.role)
+                if field:
+                    for item in data["result"][field[0]]:
+                        item["model_label"] = item[field[1]]
+                        item[field[1]] = identity()
                 task.result, task.status, task.phase = data["result"], "succeeded", "settled"
             self.trace(
                 "validation",
@@ -523,7 +553,7 @@ class Investigation:
 
     def round(self, c: Control, plan: Plan) -> None:
         if c.rounds >= c.limits.max_review_rounds:
-            self.close(c, "resource_exhausted", "review round limit prevents required follow-up")
+            self.report(c)
             return
         c.rounds += 1
         c.progress_before = len(c.evidence) + len(c.coverage)
@@ -643,36 +673,40 @@ class Investigation:
         call = Call.model_validate(state["call"])
         started = time.monotonic()
         receipt = {"payload": None, "error": None, "usage": None}
-        timeout = min(self.limits.call_seconds, max(0.001, self.deadline - started))
         try:
-            async with asyncio.timeout(timeout), self.semaphore:
-                if call.kind == "model":
-                    schema = provider_schema(call.role)
-                    messages = [
-                        *call.request["messages"],
-                        {
-                            "role": "user",
-                            "content": 'Return the tagged action as JSON. If the output schema wraps it in "action", use that wrapper. Do not execute any native tools, commands, web searches, file access or delegate. Only request the supplied frozen-source tools in the JSON action.',
-                        },
-                    ]
-                    result = await self.model.complete(messages, schema)
-                    receipt["payload"] = result.action.get("action", result.action)
-                    if result.usage:
-                        receipt["usage"] = {
-                            "input_tokens": result.usage.input_tokens,
-                            "output_tokens": result.usage.output_tokens,
-                        }
-                else:
+            async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
+                async with self.semaphore:
+                    timeout = min(
+                        self.limits.call_seconds, max(0.001, self.deadline - time.monotonic())
+                    )
+                    async with asyncio.timeout(timeout):
+                        if call.kind == "model":
+                            schema = provider_schema(call.role)
+                            messages = [
+                                *call.request["messages"],
+                                {
+                                    "role": "user",
+                                    "content": 'Return the tagged action as JSON. If the output schema wraps it in "action", use that wrapper. Do not execute any native tools, commands, web searches, file access or delegate. Only request the supplied frozen-source tools in the JSON action.',
+                                },
+                            ]
+                            result = await self.model.complete(messages, schema)
+                            receipt["payload"] = result.action.get("action", result.action)
+                            if result.usage:
+                                receipt["usage"] = {
+                                    "input_tokens": result.usage.input_tokens,
+                                    "output_tokens": result.usage.output_tokens,
+                                }
+                        else:
 
-                    async def query():
-                        payload = await self.registry[call.request["name"]].ainvoke(
-                            call.request["arguments"], config={"callbacks": []}
-                        )
-                        return ToolPage.model_validate(payload)
+                            async def query():
+                                payload = await self.registry[call.request["name"]].ainvoke(
+                                    call.request["arguments"], config={"callbacks": []}
+                                )
+                                return ToolPage.model_validate(payload)
 
-                    fault = FaultSelection(**call.fault)
-                    page = await apply_fault(query, fault, timeout_seconds=timeout)()
-                    receipt["payload"] = page.model_dump(mode="json")
+                            fault = FaultSelection(**call.fault)
+                            page = await apply_fault(query, fault, timeout_seconds=timeout)()
+                            receipt["payload"] = page.model_dump(mode="json")
         except Exception as exc:
             receipt["error"] = f"{type(exc).__name__}: {exc}"
         receipt["latency_ms"] = round((time.monotonic() - started) * 1000, 3)

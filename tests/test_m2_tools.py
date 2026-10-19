@@ -106,3 +106,11 @@ async def test_codex_cancellation_kills_and_reaps_child(tmp_path, monkeypatch) -
         await task
     process.kill.assert_called_once()
     process.wait.assert_awaited_once()
+
+
+async def test_codex_unavailable_hint_matches_cli_selection(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    with pytest.raises(RuntimeError, match="--model scripted --script"):
+        await CodexExecModel().complete([], {})
+    command = CodexExecModel().build_command(Path("/tmp"), Path("/schema"), Path("/out"))
+    assert command[command.index("view_image") - 1] == "--disable"
