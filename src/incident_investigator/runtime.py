@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import time
 from functools import cache, reduce
 from operator import or_
@@ -986,7 +987,7 @@ async def investigate(
     from langsmith import tracing_context
 
     from incident_investigator.reporting import export_report, retain_snapshot
-    from incident_investigator.workspace import home
+    from incident_investigator.workspace import home, write_json
 
     if graph not in {"hub", "staged"}:
         raise ValueError(f"unknown graph: {graph}")
@@ -1034,7 +1035,7 @@ async def investigate(
             }
             save_source(snapshot, run_dir)
             retain_snapshot(snapshot, run_dir)
-            (run_dir / "run.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            write_json(run_dir / "run.json", metadata)
         runner = Investigation(
             snapshot,
             model,
@@ -1057,7 +1058,9 @@ async def investigate(
             "callbacks": [],
             "recursion_limit": 1000,
         }
-        with runner.observer as observer:
+        with TraceSession(metadata["run_id"], snapshot.case_id, graph=graph) as observer:
+            runner.observer = observer
+            await observer.save_link(run_dir, final=False)
             async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
                 compiled = runner.graph().compile(checkpointer=saver)
                 try:

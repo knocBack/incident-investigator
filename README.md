@@ -253,8 +253,10 @@ graph spans; explicit AGENT, LLM, and TOOL spans retain task/call IDs and usage 
 our custom model adapters. Each run has its own trace/session identity. Fault
 expectations and API credentials are not attached to these spans.
 
-After export, `phoenix.json` records the trace ID and a deep link resolved through
-Phoenix's local project API. **Open in Phoenix** appears when that URL is available.
+Before graph execution, `phoenix.json` records the trace ID and a deep link
+resolved through Phoenix's local project API (creating the local project when
+needed). **Open in Phoenix** is available for ongoing runs; completed spans appear
+as the run progresses. The pointer is finalized after export.
 A missing collector leaves the local report intact and records an unresolved link;
 historical tracing-off runs show **not captured**. `trace.jsonl` and LangGraph's
 SQLite checkpoints remain authoritative local artifacts; the console does not

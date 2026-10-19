@@ -61,7 +61,16 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
     )
     assets = Path(__file__).parent / "web"
     templates = Jinja2Templates(directory=str(assets))
-    templates.env.filters.update(pretty=pretty)
+
+    def safe_phoenix_url(value):
+        from incident_investigator.telemetry.tracing import local_url
+
+        try:
+            return local_url(value) if isinstance(value, str) else None
+        except ValueError:
+            return None
+
+    templates.env.filters.update(pretty=pretty, phoenix_url=safe_phoenix_url)
     templates.env.globals.update(dimensions=DIMENSIONS)
     app.mount("/static", StaticFiles(directory=str(assets)), name="static")
 

@@ -316,10 +316,15 @@ def test_unfinished_run_keeps_source_and_metadata(repo):
         },
     )
     repo.artifacts.write("runs/unfinished/snapshot/observations.jsonl", b"")
+    repo.artifacts.save_json(
+        "runs/unfinished/phoenix.json",
+        {"status": "recording", "url": "http://127.0.0.1:6006/projects/project/traces/live-trace"},
+    )
     repo.runs.refresh()
     run = repo.runs.runs()[0]
     assert run["case"] == "frozen-case" and run["model"] == "test/model"
     assert run["status"] == "unfinished" and run["verdict"] == "ungraded"
     assert run["created"] == 1000
     with TestClient(create_console(repo)) as client:
+        assert "http://127.0.0.1:6006/projects/project/traces/live-trace" in client.get("/").text
         assert "Full frozen input retained" in client.get(f"/runs/{run['id']}?tab=evidence").text

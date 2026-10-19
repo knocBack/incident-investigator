@@ -50,6 +50,12 @@
                         </td>
                         <td>
                             {{ badge(r.verdict) }}<small>{{ r.status }}</small>
+                            {% if r.phoenix_url|phoenix_url %}
+                                <a class="button small"
+                                   href="{{ r.phoenix_url|phoenix_url }}"
+                                   target="_blank"
+                                   rel="noreferrer">Open in Phoenix ↗</a>
+                            {% endif %}
                         </td>
                         <td class="number">
                             {% if r.cost is not none %}{{ '%.5f'|format(r.cost) }}{% else %}unknown{% endif %}

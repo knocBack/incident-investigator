@@ -215,7 +215,7 @@ class TraceSession:
             self.root.set_attribute("output.value", json.dumps(task.get("result") or {}))
             self.root.set_attribute("output.mime_type", "application/json")
 
-    async def save_link(self, directory):
+    async def save_link(self, directory, *, final=True):
         if not self.tracer:
             return
         trace_id = format(self.root.get_span_context().trace_id, "032x")
@@ -223,7 +223,7 @@ class TraceSession:
             "trace_id": trace_id,
             "run_id": self.attributes["run_id"],
             "project": PROJECT,
-            "status": "recorded",
+            "status": "recorded" if final else "recording",
             "url": None,
         }
         if self.provider:
@@ -239,7 +239,13 @@ class TraceSession:
                     ) as client:
                         for attempt in range(6):
                             response = await client.get(self.url + "/v1/projects/" + PROJECT)
-                            if response.status_code == 404 and attempt < 5:
+                            if response.status_code == 404 and not final:
+                                # Resolve/create the local project before the first call,
+                                # so the trace URL is visible while its run is ongoing.
+                                response = await client.post(
+                                    self.url + "/v1/projects", json={"name": PROJECT}
+                                )
+                            if response.status_code in {404, 409} and attempt < 5:
                                 await asyncio.sleep(0.2)
                                 continue
                             response.raise_for_status()

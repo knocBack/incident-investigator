@@ -301,6 +301,7 @@ class IndexedRunRepository(RunRepository):
             attempt = store.json(prefix + "/attempt-error.json")
             grade = overlays.get(result.get("run_id"), store.json(prefix + "/grade.json"))
             pointer = store.json(prefix + "/expectation.json")
+            phoenix = store.json(prefix + "/phoenix.json")
             events = store.lines(prefix + "/trace.jsonl")
             times = [e["at"] for e in events if isinstance(e.get("at"), int | float)]
             usage = list(result.get("usage", {}).values())
@@ -328,6 +329,7 @@ class IndexedRunRepository(RunRepository):
                     "case": result.get("case_id", "unknown"),
                     "fault": grade.get("family", pointer.get("family", "unknown")),
                     "models": models,
+                    "phoenix_url": phoenix.get("url"),
                     "model": ", ".join(sorted(set(models.values()))),
                     "graph": recorded_graph(result.get("graph", grade.get("graph"))),
                     "status": result.get(

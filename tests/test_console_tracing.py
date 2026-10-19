@@ -114,13 +114,30 @@ async def test_langgraph_instrumentation_and_phoenix_deep_link(monkeypatch, tmp_
         project_reads += 1
         if project_reads == 1:
             return httpx.Response(404)
-        assert request.url.path == "/v1/projects/incident-investigator"
+        if request.method == "POST":
+            assert request.url.path == "/v1/projects"
+            assert json.loads(request.content) == {"name": "incident-investigator"}
+        else:
+            assert request.url.path == "/v1/projects/incident-investigator"
         return httpx.Response(200, json={"data": {"id": "UHJvamVjdDox"}})
 
     def client(**kwargs):
         kwargs.setdefault("transport", httpx.MockTransport(handler))
         return original_client(**kwargs)
 
+    from incident_investigator.models import ScriptedModel
+
+    original_complete = ScriptedModel.complete
+
+    async def complete_with_live_pointer(self, *args, **kwargs):
+        pointer_path = next(tmp_path.glob("*/phoenix.json"))
+        live = json.loads(pointer_path.read_text())
+        assert live["status"] == "recording"
+        assert live["url"] and live["trace_id"] in live["url"]
+        assert not list(tmp_path.glob("*/result.json"))
+        return await original_complete(self, *args, **kwargs)
+
+    monkeypatch.setattr(ScriptedModel, "complete", complete_with_live_pointer)
     monkeypatch.setattr(httpx, "AsyncClient", client)
     try:
         directory = await cli.demo(
