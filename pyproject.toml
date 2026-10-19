@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "incident-investigator"
+version = "0.0.0"
+description = "Local multi-agent incident investigation MVP"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "aiosqlite==0.22.1",
+  "fastapi",
+  "httpx",
+  "langchain-core==1.6.12",
+  "langgraph==1.2.16",
+  "langgraph-checkpoint-sqlite==3.1.2",
+  "pydantic==2.12.5",
+  "uvicorn",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.0.2",
+  "pytest-asyncio==1.3.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/incident_investigator"]

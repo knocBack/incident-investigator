@@ -1,0 +1,8 @@
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    base_branches: [main]
+path_instructions:
+  - path: "docs/**"
+    instructions: "These are accepted design specifications. docs/evaluation-plan.md is evaluator-only; do not expose its expectations to runtime agents."
