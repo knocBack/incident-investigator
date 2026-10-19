@@ -21,7 +21,7 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
-def leaderboard(grades, out):
+def leaderboard(grades, out, skipped=()):
     out.mkdir(parents=True, exist_ok=True)
     groups = {}
     for g in grades:
@@ -68,6 +68,7 @@ def leaderboard(grades, out):
         "grader_version": "grader.v1",
         "models": rows,
         "runs": grades,
+        "skipped": list(skipped),
     }
     save(out / "leaderboard.json", data)
     lines = [
@@ -81,6 +82,12 @@ def leaderboard(grades, out):
     for r in rows:
         lines.append(
             f"| {json.dumps(r['models'], sort_keys=True)} | {r['runs']} | {r['verdicts']} | {r['mean_grounding']} | {r['mean_cost']} | {r['mean_input_tokens']}/{r['mean_output_tokens']} | {r['mean_wall_seconds']} | {r['execution_failures']} |"
+        )
+    if skipped:
+        lines.extend(["", "## Skipped attempts", ""])
+        lines.extend(
+            f"- {item['model']} ({item['fault']}, repeat {item['repeat']}): {item['reason']}"
+            for item in skipped
         )
     (out / "leaderboard.md").write_text("\n".join(lines) + "\n")
     return data
@@ -103,17 +110,19 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     if not faults or set(faults) - set(FAMILIES) or args.repeats < 1:
         raise ValueError("known faults and repeats >= 1 required")
     amount(args.budget_usd)
+    max_input_tokens = getattr(args, "max_input_tokens", 64000)
+    if max_input_tokens < 1:
+        raise ValueError("max input tokens must be positive")
     out = args.out
     out.mkdir(parents=True, exist_ok=False)
-    save(
-        out / "batch.json",
-        {
+    batch = {
             "version": "suite.v1",
             "exposure": "development lab; exploratory",
             "faults": faults,
             "models": args.models.split(","),
             "repeats": args.repeats,
             "budget_usd": args.budget_usd,
+            "max_input_tokens": max_input_tokens,
             "run_order": "model, repeat, fault",
             "settings": "runtime defaults; one selected model for all roles",
             "prompt_hashes": {
@@ -127,8 +136,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 for family in faults
             },
             "started_at": time.time(),
-        },
-    )
+            "skipped": [],
+        }
+    save(out / "batch.json", batch)
     grades = []
     guard = None
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -147,24 +157,58 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     for fault in faults:
                         if guard:
                             guard.observe(await key_usage(client))
-                            if not guard.launch_allowed(price_bound(catalog[model_id])):
+                            try:
+                                bound = price_bound(
+                                    catalog[model_id], max_input_tokens=max_input_tokens
+                                )
+                            except (KeyError, ValueError) as exc:
+                                reason = str(exc)
+                            else:
+                                if bound > 0 and guard.charged() >= guard.cap:
+                                    save(
+                                        out / "budget-stop.json",
+                                        {
+                                            "model": model_id,
+                                            "fault": fault,
+                                            "repeat": repeat,
+                                            "reason": "suite budget cap already spent",
+                                            **guard.snapshot(),
+                                        },
+                                    )
+                                    return leaderboard(grades, out, batch["skipped"])
+                                reason = None if guard.launch_allowed(bound) else (
+                                    "suite budget reservation cannot fit remaining budget"
+                                )
+                            if reason:
+                                skipped = {
+                                    "model": model_id,
+                                    "fault": fault,
+                                    "repeat": repeat,
+                                    "reason": reason,
+                                }
+                                batch["skipped"].append(skipped)
+                                save(out / "batch.json", batch)
                                 save(
                                     out / "budget-stop.json",
                                     {
                                         "model": model_id,
                                         "fault": fault,
                                         "repeat": repeat,
+                                        "reason": reason,
                                         **guard.snapshot(),
                                     },
                                 )
-                                return leaderboard(grades, out)
+                                leaderboard(grades, out, batch["skipped"])
+                                continue
                         if model_factory:
                             adapter = model_factory(model_id)
                         else:
                             adapter = OpenRouterModel()
                             # Explicit all-role selection avoids inherited per-role overrides.
                             adapter._models = dict.fromkeys(adapter._models, model_id)
-                            adapter = BoundedModel(adapter, catalog, guard)
+                            adapter = BoundedModel(
+                                adapter, catalog, guard, max_input_tokens=max_input_tokens
+                            )
                         # Inject the adapter through the CLI factory without altering runtime.
                         original = cli.model
                         cli.model = lambda args, adapter=adapter: adapter
@@ -196,7 +240,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             g["process"]["execution_status"] = "failed"
                         save(directory / "grade.json", g)
                         grades.append(g)
-                        leaderboard(grades, out)
+                        leaderboard(grades, out, batch["skipped"])
                         if guard:
                             guard.observe(await key_usage(client))
                             save(
@@ -208,7 +252,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 guard.observe(await key_usage(client))
                 save(out / "spend-after.json", {"usage_delta": str(guard.key_delta)})
                 save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})
-    return leaderboard(grades, out)
+    return leaderboard(grades, out, batch["skipped"])
 
 
 def add_commands(sub):
@@ -222,6 +266,7 @@ def add_commands(sub):
     command.add_argument("--models", required=True)
     command.add_argument("--repeats", type=int, default=1)
     command.add_argument("--budget-usd", required=True)
+    command.add_argument("--max-input-tokens", type=int, default=64000)
     command.add_argument("--out", type=Path, required=True)
     command.add_argument("--script", type=Path)
 

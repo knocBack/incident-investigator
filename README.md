@@ -209,9 +209,13 @@ uv run incident-investigator eval-suite --faults all --model openrouter \
 Each model runs every fault with fresh lab/model state. The batch records run order,
 prices, settings, all run artifacts, grades, rubric worksheets and a JSON/Markdown
 leaderboard. The output directory must be new. A shared budget guard samples key
-usage before/after runs and reserves full catalogue context plus 4096 output tokens
-with a 10% margin before every call. Unknown-cost failures retain their reservation;
-provider price ceilings constrain routing. Unsupported billing dimensions fail closed.
+usage before/after runs and reserves up to 64k prompt tokens (configurable with
+`--max-input-tokens`) plus 4096 output tokens with a 10% margin before every call.
+Cache and prompt rates are treated as alternative prompt-side rates, using the highest
+catalogue tier. The bounded adapter refuses an oversize prompt before sending it.
+Unknown-cost failures retain their reservation; provider price ceilings constrain
+routing. Unsupported billing dimensions and reservations that cannot fit are recorded
+as skipped attempts, while the batch continues with other models.
 Zero-price models work with a zero budget. Aggregate key usage can be delayed or
 include other callers, so conservative reservations can stop a batch early.
 
