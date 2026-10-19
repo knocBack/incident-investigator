@@ -1,0 +1,5 @@
+{
+  "case_id": "dev-00",
+  "root_cause": "bad_configuration",
+  "expected_signal": "inventory database deadline reduced to 50 ms"
+}

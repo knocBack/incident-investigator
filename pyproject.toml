@@ -37,6 +37,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/incident_investigator"]

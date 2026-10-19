@@ -4,6 +4,15 @@ Local multi-agent incident investigation MVP.
 
 Status: M0 scaffolding only.
 
+## Run the lab
+
+```sh
+uv run python -m incident_investigator.lab serve --telemetry telemetry.jsonl
+uv run python -m incident_investigator.lab load --rps 10 --duration 30
+uv run python -m incident_investigator.lab fault set bad_configuration
+uv run python -m incident_investigator.lab snapshot --case dev-00 --cutoff 2026-01-01T00:01:00Z --service inventory --symptoms timeouts --out fixtures/dev-00
+```
+
 ## Quickstart
 
 ```sh
