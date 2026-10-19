@@ -19,6 +19,7 @@ from typing import Any, Protocol
 class ModelUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cost: float | None = None
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,15 @@ class ModelResult:
     usage: ModelUsage | None
     latency_ms: float
     raw_id: str | None
+    model: str | None = None
+
+
+class ModelCallError(RuntimeError):
+    """Provider failure with an explicit runtime retry decision."""
+
+    def __init__(self, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class ModelAdapter(Protocol):
@@ -196,4 +206,8 @@ def model_from_environment() -> ModelAdapter:
         return ScriptedModel()
     if mode == "codex":
         return CodexExecModel()
-    raise ValueError("II_MODEL must be scripted or codex")
+    if mode == "openrouter":
+        from .openrouter import OpenRouterModel
+
+        return OpenRouterModel()
+    raise ValueError("II_MODEL must be scripted, codex or openrouter")

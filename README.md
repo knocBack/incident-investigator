@@ -63,8 +63,8 @@ uv run pre-commit install
 ```sh
 uv sync --locked
 uv run incident-investigator demo --model scripted --script tests/scripted-demo.json --out runs/
-uv run incident-investigator demo --model codex --fault bad_configuration --out runs/
-uv run incident-investigator investigate --case dev-00 --model codex --out runs/
+uv run incident-investigator demo --model openrouter --fault bad_configuration --out runs/
+uv run incident-investigator investigate --case dev-00 --model openrouter --out runs/
 uv run incident-investigator investigate --case dev-00 --case dev-00 --model scripted --script tests/scripted-demo.json --out runs/
 uv run incident-investigator inspect runs/<run-uuid>
 ```
@@ -73,8 +73,9 @@ uv run incident-investigator inspect runs/<run-uuid>
 selected fault, sends failing load, freezes telemetry at a cutoff into a temporary
 case, and investigates that snapshot. Agents never call the live app. Fault choices:
 `bad_configuration` (default), `deployment_regression`, `database_contention`,
-`resource_exhaustion`, `traffic_overload`. Model use needs a locally authenticated
-`codex` CLI; the adapter selects `gpt-6-luna` with low reasoning effort.
+`resource_exhaustion`, `traffic_overload`. For OpenRouter, set `OPENROUTER_API_KEY`
+in your shell. `--model codex` remains available with a locally authenticated CLI
+and selects `gpt-6-luna` with low reasoning effort.
 
 Scripted mode is a deterministic replay, not a diagnostic fallback. Scripts are
 caller-supplied with `--script`; the example lives under `tests/` and reports
@@ -94,6 +95,71 @@ SQLite checkpoints retain admission/receipts/acceptance, but public resume and
 crash/replay hardening are deferred to M4. The bounded demo profile and payloads
 are specified in [LLD-03](docs/lld-03-roles.md). This is not a recovery guarantee.
 LangSmith tracing is explicitly disabled; traces and artifacts remain local.
+
+## OpenRouter models
+
+`--model openrouter` uses `https://openrouter.ai/api/v1/chat/completions` through
+httpx. The credential is read only from `OPENROUTER_API_KEY`; it is never included
+in saved configuration, prompts, reports or traces. No native/callable tools are
+sent to the API. Every role requests retrieval by returning a JSON `tools` action;
+the prompt lists that role's registry names and argument schemas.
+
+Default: `nvidia/nemotron-3-super-120b-a12b:free`. Its current public model catalogue
+entry advertises structured outputs. The adapter fetches and caches the public
+catalogue per run, uses strict `response_format: json_schema` for supporting models,
+and uses JSON mode plus the same runtime validation/correction for other models.
+Provider parameter support is required and provider fallback is disabled. Each
+request has a hard 30-second timeout and a 4096-token output bound. Models with a
+reasoning switch have it disabled for this demo. There are no hidden HTTP retries;
+the runtime retries eligible call failures once. Specialists see their remaining
+model-call allowance; their last permitted response schema allows a final result
+only, so they can summarize retrieved evidence rather than request another query.
+Authentication/credit failures
+(401/402) are nonretryable; rate limits (429) include the provider message and are
+retryable within the same limits. Free-model rate limits can prevent a run.
+
+Set a default model for all roles or override any role with these environment names:
+
+```sh
+export II_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+# Optional overrides, using complete organization/model IDs:
+# II_OPENROUTER_MODEL_ORCHESTRATOR
+# II_OPENROUTER_MODEL_OBSERVABILITY
+# II_OPENROUTER_MODEL_DEPENDENCY
+# II_OPENROUTER_MODEL_REASONING
+# II_OPENROUTER_MODEL_CRITIC
+# II_OPENROUTER_MODEL_REPORTING
+II_OPENROUTER_FREE_ONLY=1 uv run incident-investigator demo --model openrouter --fault bad_configuration --out runs/
+```
+
+Free-only mode checks the catalogue's zero input/output prices and the `:free`
+suffix before sending a completion. `google/gemma-4-31b-it:free` and
+`minimax/minimax-m3.1-flash:free` are manual alternatives; their current catalogue
+entries use the JSON-mode path rather than advertising structured outputs.
+There is no automatic model substitution. Resolved per-role models, generation
+IDs, token usage, returned cost and latency are saved locally. Missing usage or cost
+remains `unknown`, with known subtotals reported separately.
+
+Paid demo preset (documentation only; not executed during this change):
+
+```sh
+export II_OPENROUTER_MODEL=deepseek/deepseek-chat
+export II_OPENROUTER_MODEL_ORCHESTRATOR=deepseek/deepseek-chat
+export II_OPENROUTER_MODEL_OBSERVABILITY=google/gemini-2.5-flash-lite
+export II_OPENROUTER_MODEL_REASONING=deepseek/deepseek-r1-0528
+```
+
+`google/gemini-2.5-flash` is another paid Observability option. Per-role mapping is
+for demonstrations. The later model-comparison benchmark must use **one model for
+both multi-agent and single-agent modes**, with the same budgets and settings.
+
+Mocked adapter tests make no network calls. An additional free-only live API test
+is skipped by default; explicitly enable it with `II_LIVE_OPENROUTER=1` and run
+`uv run pytest -m live tests/test_openrouter.py`. It requires the key in your shell.
+
+API references: [structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs),
+[usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting),
+and [public model catalogue](https://openrouter.ai/api/v1/models).
 
 Codex isolation: the installed `codex exec --help` and `codex features list`
 expose `--disable shell_tool`, `--disable unified_exec`, and `--disable view_image`; all are applied,

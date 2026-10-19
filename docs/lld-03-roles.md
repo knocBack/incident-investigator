@@ -60,3 +60,16 @@ Artifacts: `state.sqlite`, `trace.jsonl`, `result.json`, `report.md`, local per 
 run directory. JSON retains tasks, receipts, revisions, objections, dispositions,
 evidence, completeness, stop reason and all six roles' measured usage (unknown token
 components remain unknown). Runtime never reads docs or evaluator material.
+
+OpenRouter is an optional chat-completions adapter selected with `--model openrouter`.
+Resolved models are recorded per role; the credential is never part of state.
+Prompts expose registry schemas and JSON action requests, with no native tools.
+The public model catalogue selects schema output versus JSON mode. The runtime
+owns bounded retries; provider authentication/credit errors are nonretryable and
+rate limits are retryable. Receipts retain generation IDs, available tokens,
+returned cost and latency. Per-role model maps are demo settings; comparison
+benchmarks must use one model for both modes.
+
+Specialist model requests expose the remaining task-call allowance. The final
+permitted task model call receives a final-only response schema; all evidence and
+result validation still applies, and invalid output cannot exceed the saved limits.

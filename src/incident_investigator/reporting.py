@@ -21,7 +21,11 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
             values = [(row.get("usage") or {}).get(kind) for row in model_rows]
             tokens[kind] = sum(values) if all(v is not None for v in values) else "unknown"
             tokens["known_" + kind] = sum(v for v in values if v is not None)
+        costs = [(row.get("usage") or {}).get("cost") for row in model_rows]
         usage[role] = {
+            "model": c["models"].get(role, "unknown"),
+            "cost": sum(costs) if all(cost is not None for cost in costs) else "unknown",
+            "known_cost": sum(cost for cost in costs if cost is not None),
             "model_calls": sum(call["kind"] == "model" for call in calls),
             "tool_calls": sum(call["kind"] == "tool" for call in calls),
             **tokens,
@@ -44,6 +48,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "hypotheses": reasoning.get("hypotheses", []),
         "report": report,
         "usage": usage,
+        "models": c["models"],
         "state": c,
         "receipts": inbox,
     }
@@ -137,11 +142,11 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "",
         "## Per-role resource usage",
         "",
-        "| Role | Model calls | Tool calls | Input tokens | Output tokens | Latency ms |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Role | Model | Model calls | Tool calls | Input tokens | Output tokens | Cost (provider) | Latency ms |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for role, row in usage.items():
         lines += [
-            f"| {role} | {row['model_calls']} | {row['tool_calls']} | {row['input_tokens']} | {row['output_tokens']} | {row['latency_ms']} |"
+            f"| {role} | {row['model']} | {row['model_calls']} | {row['tool_calls']} | {row['input_tokens']} | {row['output_tokens']} | {row['cost']} | {row['latency_ms']} |"
         ]
     (out / "report.md").write_text("\n".join(lines) + "\n")

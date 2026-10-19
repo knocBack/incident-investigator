@@ -13,12 +13,14 @@ import httpx
 
 from incident_investigator.lab.__main__ import snapshot
 from incident_investigator.lab.app import JsonlTelemetrySink, create_app
-from incident_investigator.models import CodexExecModel, ScriptedModel
+from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
 from incident_investigator.runtime import investigate
 from incident_investigator.sources.loader import load_snapshot
 
 
 def model(args):
+    if args.model == "openrouter":
+        return OpenRouterModel()
     if args.model == "codex":
         return CodexExecModel()
     actions = json.loads(args.script.read_text()) if args.script else []
@@ -84,7 +86,9 @@ def main() -> None:
     inspect.add_argument("run_dir", type=Path)
     for name in ("investigate", "demo"):
         command = sub.add_parser(name)
-        command.add_argument("--model", choices=["scripted", "codex"], default="scripted")
+        command.add_argument(
+            "--model", choices=["scripted", "codex", "openrouter"], default="scripted"
+        )
         command.add_argument(
             "--script",
             type=Path,

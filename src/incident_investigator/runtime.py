@@ -25,7 +25,7 @@ from incident_investigator.contracts import (
     Role,
     action_type,
 )
-from incident_investigator.models import ModelAdapter
+from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
 from incident_investigator.sources.loader import CaseSnapshot
 from incident_investigator.tools import build_registry
 from incident_investigator.tools.contracts import QUERY_MODELS, ToolPage
@@ -84,6 +84,7 @@ class Control(Record):
     status: Literal["running", "completed", "failed", "resource_exhausted"] = "running"
     stop_reason: str | None = None
     partial: bool = False
+    models: dict[str, str] = Field(default_factory=dict)
     stage: str = "start"
     tasks: dict[str, Task] = Field(default_factory=dict)
     batch: list[str] = Field(default_factory=list)
@@ -129,7 +130,7 @@ def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def provider_schema(role: str) -> dict:
+def provider_schema(role: str, *, allow_tools: bool = True) -> dict:
     """Concrete tool argument schemas avoid free-form objects in strict output."""
     final = create_model(
         PAYLOADS[role].__name__ + "Final",
@@ -138,7 +139,7 @@ def provider_schema(role: str) -> dict:
         result=(PAYLOADS[role], ...),
     )
     variants = [final]
-    if role in ALLOWED_TOOLS:
+    if role in ALLOWED_TOOLS and allow_tools:
         requests = [
             create_model(
                 name.title() + "Request",
@@ -235,6 +236,13 @@ class Investigation:
                 for name in ALLOWED_TOOLS.get(role, set())
             },
         }
+        prompt += (
+            "\nYou have NO native or callable tools. Retrieve data only by returning "
+            "a JSON tools action naming these registry tools. Do not claim they are "
+            "unavailable because they are not callable. An empty registry means your "
+            "role cannot retrieve. Registry names and argument schemas: "
+            + json.dumps(inputs["tools"])
+        )
         return [
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(inputs, ensure_ascii=False)},
@@ -447,6 +455,8 @@ class Investigation:
         if time.monotonic() >= self.deadline or total >= cap or count >= task_cap:
             self.close(c, "resource_exhausted", f"{kind} call/task or wall time limit")
             return
+        if kind == "model":
+            request = {**request, "remaining_model_calls_after_this": task_cap - count - 1}
         call_id = identity()
         fault = (
             self.fault_selection(c, request["name"], request["arguments"])
@@ -482,7 +492,7 @@ class Investigation:
         task = c.tasks[call.task_id]
         task.pending.remove(call.call_id)
         if receipt.get("error"):
-            if call.retry < c.limits.call_retries:
+            if call.retry < c.limits.call_retries and receipt.get("retryable", True):
                 self.admit(
                     c, task, call.kind, call.request, retry=call.retry + 1, retry_of=call.call_id
                 )
@@ -746,20 +756,36 @@ class Investigation:
                     )
                     async with asyncio.timeout(timeout):
                         if call.kind == "model":
-                            schema = provider_schema(call.role)
+                            schema = provider_schema(
+                                call.role,
+                                allow_tools=call.request.get("remaining_model_calls_after_this", 1)
+                                > 0,
+                            )
                             messages = [
                                 *call.request["messages"],
                                 {
                                     "role": "user",
-                                    "content": 'Return the tagged action as JSON. If the output schema wraps it in "action", use that wrapper. Do not execute any native tools, commands, web searches, file access or delegate. Only request the supplied frozen-source tools in the JSON action.',
+                                    "content": (
+                                        'Return the tagged action as JSON under the "action" wrapper. '
+                                        "You have NO native or callable tools. Prior user messages contain "
+                                        "the real registry tool results. Read them and advance the investigation; "
+                                        "do not repeat a completed query without a new evidence question. "
+                                        "Return final findings once you have enough evidence, including gaps. "
+                                        f"Remaining task model calls after this response: {call.request.get('remaining_model_calls_after_this', 'unknown')}. "
+                                        "If none remain, return a final result now, not more tools."
+                                    ),
                                 },
                             ]
                             result = await self.model.complete(messages, schema)
                             receipt["payload"] = result.action.get("action", result.action)
+                            receipt["raw_id"] = result.raw_id
+                            receipt["model"] = result.model
+                            receipt["provider_latency_ms"] = result.latency_ms
                             if result.usage:
                                 receipt["usage"] = {
                                     "input_tokens": result.usage.input_tokens,
                                     "output_tokens": result.usage.output_tokens,
+                                    "cost": result.usage.cost,
                                 }
                         else:
 
@@ -774,6 +800,7 @@ class Investigation:
                             receipt["payload"] = page.model_dump(mode="json")
         except Exception as exc:
             receipt["error"] = f"{type(exc).__name__}: {exc}"
+            receipt["retryable"] = getattr(exc, "retryable", True)
         receipt["latency_ms"] = round((time.monotonic() - started) * 1000, 3)
         self.trace(
             f"{call.kind}_call",
@@ -782,6 +809,8 @@ class Investigation:
             call_id=call.call_id,
             role=call.role,
             tokens=receipt["usage"] or "unknown",
+            model=receipt.get("model"),
+            generation_id=receipt.get("raw_id"),
             latency_ms=receipt["latency_ms"],
             outcome=receipt["error"] or "received",
         )
@@ -832,7 +861,20 @@ async def investigate(
     runner = Investigation(
         snapshot, model, run_dir, limits, semaphore or asyncio.Semaphore(4), faults=faults
     )
-    initial = Control(run_id=run_id, case_id=snapshot.case_id, limits=limits)
+    resolve_model = getattr(model, "model_for_role", None)
+    models = {
+        role: (
+            resolve_model(role)
+            if resolve_model
+            else "scripted"
+            if isinstance(model, ScriptedModel)
+            else "gpt-6-luna"
+            if isinstance(model, CodexExecModel)
+            else type(model).__name__
+        )
+        for role in PAYLOADS
+    }
+    initial = Control(run_id=run_id, case_id=snapshot.case_id, limits=limits, models=models)
     async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
         graph = runner.graph().compile(checkpointer=saver)
         # callbacks=[] alone cannot override LANGSMITH_TRACING inherited by native tools.
