@@ -176,3 +176,44 @@ a model-accessible environment. Runtime prompts contain only package role text,
 task context, retrieved frozen observations and prior accepted results; runtime
 never imports evaluators or reads design documents. Call/time bounds limit runtime,
 not provider billing; missing usage is reported honestly.
+
+## Evaluate
+
+Grade saved runs without model calls:
+
+```sh
+uv run incident-investigator eval runs/<uuid> --fault bad_configuration --out /tmp/grades
+```
+
+New demos save `expectation.json` beside `result.json`, outside the temporary
+agent-visible source snapshot. `eval` can use this pointer automatically; dev-00
+retains its evaluator expectation. Expectations and grading code are never runtime
+inputs. Five lab families live in `evals/expected/faults`; these development cases
+are separate from the ten primary specification cases and two reliability variants.
+
+Run an exploratory batch (requires OpenRouter credentials and explicitly authorizes
+paid calls):
+
+```sh
+uv run incident-investigator eval-suite --faults all --model openrouter \
+  --models organization/model --repeats 2 --budget-usd 0.50 \
+  --out evals/results/my-batch
+```
+
+Each model runs every fault with fresh lab/model state. The batch records run order,
+prices, settings, all run artifacts, grades, rubric worksheets and a JSON/Markdown
+leaderboard. The output directory must be new. A shared budget guard samples key
+usage before/after runs and reserves full catalogue context plus 4096 output tokens
+with a 10% margin before every call. Unknown-cost failures retain their reservation;
+provider price ceilings constrain routing. Unsupported billing dimensions fail closed.
+Zero-price models work with a zero budget. Aggregate key usage can be delayed or
+include other callers, so conservative reservations can stop a batch early.
+
+`--model scripted --models scripted --script tests/scripted-demo.json` runs without
+network calls. Grade verdicts are correct, partial, wrong, inconclusive or no_report.
+Correct requires the top hypothesis to name the culprit, match mechanism patterns
+and cite a retrieved key observation. Citation grounding measures provenance, not
+semantic entailment. Complete the five-dimension human worksheet before claiming
+semantic quality. Missing usage stays unknown; wall time and summed role durations
+are separate. Initial results are exploratory with no pass threshold or superiority
+claim. Historical results are in `evals/results/exploratory-2026-10-19`.

@@ -58,7 +58,14 @@ async def demo(args) -> Path:
                     start=start,
                 )
             )
-            return await investigate(load_snapshot("lab-demo", source_root), model(args), args.out)
+            directory = await investigate(
+                load_snapshot("lab-demo", source_root), model(args), args.out
+            )
+            # Evaluator metadata stays outside the temporary agent-visible source root.
+            (directory / "expectation.json").write_text(
+                json.dumps({"family": args.fault, "version": "lab.v1"}) + "\n"
+            )
+            return directory
 
 
 async def run(args) -> int:
@@ -112,7 +119,13 @@ def main() -> None:
                     "traffic_overload",
                 ],
             )
+    from incident_investigator.grading.suite import add_commands, execute
+
+    add_commands(sub)
     args = parser.parse_args()
+    if args.command in {"eval", "eval-suite"}:
+        asyncio.run(execute(args))
+        return
     if args.command == "inspect":
         result = json.loads((args.run_dir / "result.json").read_text())
         print(
