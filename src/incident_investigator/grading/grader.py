@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -11,15 +13,18 @@ from pathlib import Path
 from incident_investigator.graph_config import recorded_graph
 
 VERSION = "grader.v1"
-# Wheels ship evaluator data inside the grading package, outside retrieval sources.
-EXPECTED = Path(__file__).parent / "expected"
-if not EXPECTED.is_dir():
-    EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
+_SOURCE_EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
+EXPECTED = Path(
+    os.environ.get(
+        "II_EVALS",
+        _SOURCE_EXPECTED if _SOURCE_EXPECTED.is_dir() else Path(__file__).with_name("expected"),
+    )
+).expanduser()
 FAMILIES = tuple(sorted(p.stem for p in (EXPECTED / "faults").glob("*.json")))
 
 
 def expectation(family):
-    return json.loads((EXPECTED / "faults" / f"{family}.json").read_text())
+    return json.loads((EXPECTED / "faults" / f"{family}.json").read_text(encoding="utf-8"))
 
 
 def matches(row, matcher):
@@ -245,26 +250,31 @@ def grade(result, expected, events=()):
 def grade_run(directory: Path, expected=None, *, output=None):
     directory = Path(directory)
     result_path = directory / "result.json"
-    result = json.loads(result_path.read_text()) if result_path.exists() else {}
+    result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
     if expected is None:
         pointer = directory / "expectation.json"
         if pointer.exists():
-            expected = expectation(json.loads(pointer.read_text())["family"])
+            expected = expectation(json.loads(pointer.read_text(encoding="utf-8"))["family"])
         elif result.get("case_id") == "dev-00":
-            legacy = json.loads((EXPECTED / "dev-00.json").read_text())
+            legacy = json.loads((EXPECTED / "dev-00.json").read_text(encoding="utf-8"))
             expected = expectation(legacy["root_cause"])
         else:
             raise ValueError(f"{directory}: expectation.json or explicit expectation required")
     trace = directory / "trace.jsonl"
     events = (
-        [json.loads(line) for line in trace.read_text().splitlines() if line.strip()]
+        [
+            json.loads(line)
+            for line in trace.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
         if trace.exists()
         else []
     )
     graded = grade(result, expected, events)
+    graded["graded_at"] = time.time()
     out = Path(output or directory)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "grade.json").write_text(json.dumps(graded, indent=2) + "\n")
+    (out / "grade.json").write_text(json.dumps(graded, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# Human rubric worksheet",
         "",
@@ -280,5 +290,5 @@ def grade_run(directory: Path, expected=None, *, output=None):
         for d in ("Diagnosis", "Support", "Contradictions", "Uncertainty", "Actions")
     ]
     lines += ["", "## Auto-filled facts", "", "```json", json.dumps(graded, indent=2), "```", ""]
-    (out / "grade.md").write_text("\n".join(lines))
+    (out / "grade.md").write_text("\n".join(lines), encoding="utf-8")
     return graded

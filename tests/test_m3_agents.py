@@ -653,6 +653,9 @@ async def test_report_evidence_counts_and_empty_sections(tmp_path):
 def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, expected_status):
     from incident_investigator import cli
 
+    script = tmp_path / "empty-script.json"
+    script.write_text("[]", encoding="utf-8")
+
     async def bounded_investigate(snapshot, model, out, **kwargs):
         kwargs.pop("limits")
         limits = Limits(max_model_calls=1) if expected_status == "resource_exhausted" else Limits()
@@ -668,6 +671,8 @@ def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, e
             "dev-00",
             "--model",
             "scripted",
+            "--script",
+            str(script),
             "--out",
             str(tmp_path),
         ],
@@ -689,7 +694,16 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
 
     monkeypatch.setattr(
         "sys.argv",
-        ["incident-investigator", "investigate", "--case", "missing", "--out", str(tmp_path)],
+        [
+            "incident-investigator",
+            "investigate",
+            "--case",
+            "missing",
+            "--out",
+            str(tmp_path),
+            "--script",
+            "tests/scripted-demo.json",
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()

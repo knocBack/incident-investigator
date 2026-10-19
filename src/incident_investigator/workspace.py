@@ -20,7 +20,7 @@ def batch_output(prefix: str = "batch") -> Path:
 
 def read_json(path: Path) -> dict:
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -29,7 +29,7 @@ def read_json(path: Path) -> dict:
 def read_lines(path: Path):
     """Ignore incomplete final records while a running process appends JSONL."""
     try:
-        with path.open() as stream:
+        with path.open(encoding="utf-8") as stream:
             for line in stream:
                 try:
                     value = json.loads(line)
@@ -45,7 +45,7 @@ def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)

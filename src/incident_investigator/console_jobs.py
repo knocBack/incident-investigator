@@ -139,8 +139,12 @@ def build_command(
     argv += ["--graph", request.graph]
     if request.trace:
         argv += ["--trace", "phoenix"]
-    replay = Path("tests/scripted-demo.json").resolve()
-    if request.provider == "scripted" and replay.is_file():
+    if request.provider == "scripted":
+        replay = Path(__file__).with_name("scripted-demo.json")
+        if not replay.is_file():
+            replay = Path(__file__).resolve().parents[2] / "tests" / "scripted-demo.json"
+        if not replay.is_file():
+            raise ValueError("the scripted replay is missing; reinstall the package")
         argv += ["--script", str(replay)]
     return argv, output
 

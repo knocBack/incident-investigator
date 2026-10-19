@@ -143,6 +143,10 @@ uv run incident-investigator console
 The console binds only to loopback. It uses FastAPI, server-rendered HTML, and
 small vanilla JavaScript files; there is no frontend build or account.
 
+Installed wheels include the evaluation catalog and scripted replay.
+`II_EVALS=/path/to/expected` selects another evaluator catalog containing `faults/*.json`;
+this data remains outside investigator inputs.
+
 1. Open **Run evaluation**. Faults are discovered from `evals/expected/faults/*.json`
    and the lab registry. Select scripted, one or more faults, repeats, concurrency
    (default 2), and a limits profile. Review the CLI command, then launch.

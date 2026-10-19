@@ -104,6 +104,52 @@ def token(client):
     }
 
 
+def test_grade_overlay_uses_newest_timestamp(repo):
+    # Random job keys must not decide which re-grade the viewer displays.
+    store = repo.artifacts
+    store.save_json("runs/original/result.json", {"run_id": "regraded"})
+    store.save_json("runs/original/grade.json", {"graded_at": 15, "verdict": "partial"})
+    for name, timestamp, verdict in (("a", 30, "correct"), ("z", 20, "wrong")):
+        store.save_json(
+            f"suites/{name}/grade.json",
+            {"run_id": "regraded", "graded_at": timestamp, "verdict": verdict},
+        )
+    repo.runs.refresh()
+    assert repo.runs.runs()[0]["verdict"] == "correct"
+    store.save_json("runs/original/grade.json", {"graded_at": 40, "verdict": "inconclusive"})
+    repo.runs.refresh()
+    assert repo.runs.runs()[0]["verdict"] == "inconclusive"
+
+
+@pytest.mark.parametrize("command", [["demo"], ["investigate", "--case", "missing"]])
+def test_cli_rejects_missing_script_before_creating_artifacts(
+    command, monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("II_HOME", str(tmp_path / "unused"))
+    monkeypatch.setattr("sys.argv", ["incident-investigator", *command])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert "scripted model requires --script" in capsys.readouterr().err
+    assert not (tmp_path / "unused").exists()
+
+
+def test_utf8_artifacts_and_grading_timestamp(scripted_run, tmp_path):
+    from incident_investigator.workspace import read_json, read_lines, write_json
+
+    text = "診断: délai élevé"
+    path = tmp_path / "unicode.json"
+    write_json(path, {"note": text})
+    assert text.encode("utf-8") in path.read_bytes()
+    assert read_json(path) == {"note": text}
+    path.write_text(json.dumps({"note": text}, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert list(read_lines(path)) == [{"note": text}]
+    first = grade_run(scripted_run, output=tmp_path / "first")
+    second = grade_run(scripted_run, output=tmp_path / "second")
+    assert 0 < first["graded_at"] <= second["graded_at"]
+    assert read_json(tmp_path / "second" / "grade.json")["graded_at"] == second["graded_at"]
+
+
 def test_all_run_tabs_and_rubric_save(repo, scripted_run):
     repo.runs.import_roots([scripted_run])
     ident = repo.runs.runs()[0]["id"]
@@ -193,12 +239,14 @@ def test_fault_discovery_and_catalog_contract(tmp_path):
 
 
 def test_run_panel_commands_and_paid_confirmation(repo, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     request = RunRequest(faults=["bad_configuration"])
     command, output = build_command(request, repo, "test-job", root=tmp_path)
     shown = display_command(command)
     assert shown.startswith("incident-investigator eval-suite ")
     assert "--concurrency 2" in shown and "--budget-usd 0" in shown
     assert output == tmp_path / "suites" / "test-job"
+    assert Path(command[command.index("--script") + 1]).is_file()
     request = request.model_copy(update={"provider": "openrouter", "model_id": "test/model"})
     monkeypatch.setenv("OPENROUTER_API_KEY", "secret-test-key")
     with pytest.raises(ValueError, match="confirmation"):

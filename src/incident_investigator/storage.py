@@ -288,10 +288,15 @@ class IndexedRunRepository(RunRepository):
             if k.endswith(("/result.json", "/attempt-error.json", "/run.json"))
         }
         overlays = {}
+
+        def graded_at(grade):
+            stamp = grade.get("graded_at", 0)
+            return stamp if isinstance(stamp, int | float) else 0
+
         for key in keys:
             if key.startswith("suites/") and key.endswith("/grade.json"):
                 g = store.json(key)
-                if g.get("run_id"):
+                if g.get("run_id") and graded_at(g) >= graded_at(overlays.get(g["run_id"], {})):
                     overlays[g["run_id"]] = g
         # Resolve overlapping import roots once, using canonical provenance.
         unique = {store.location(prefix): prefix for prefix in sorted(prefixes, reverse=True)}
@@ -299,7 +304,10 @@ class IndexedRunRepository(RunRepository):
         for location, prefix in unique.items():
             result = store.json(prefix + "/result.json") or store.json(prefix + "/run.json")
             attempt = store.json(prefix + "/attempt-error.json")
-            grade = overlays.get(result.get("run_id"), store.json(prefix + "/grade.json"))
+            grade = store.json(prefix + "/grade.json")
+            overlay = overlays.get(result.get("run_id"))
+            if overlay and graded_at(overlay) >= graded_at(grade):
+                grade = overlay
             pointer = store.json(prefix + "/expectation.json")
             phoenix = store.json(prefix + "/phoenix.json")
             events = store.lines(prefix + "/trace.jsonl")
