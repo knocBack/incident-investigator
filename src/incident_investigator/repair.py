@@ -6,6 +6,8 @@ Only structurally unusable output is rejected, with an error naming the field an
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin
@@ -150,11 +152,32 @@ def conform(model: type[BaseModel], value: Any, path: str, repairs: Repairs) -> 
     return result
 
 
+_FENCE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
+
+
+def _embedded_json(raw: Any, repairs: Repairs) -> Any:
+    """Recover one JSON object wrapped in a markdown fence or surrounding prose."""
+    if not isinstance(raw, str):
+        return None
+    fenced = _FENCE.search(raw)
+    candidate = fenced.group(1) if fenced else raw[raw.find("{") : raw.rfind("}") + 1]
+    try:
+        value = json.loads(candidate)
+    except ValueError:
+        return None
+    if isinstance(value, dict):
+        repairs.add("action", "JSON object extracted from markdown fence or surrounding text")
+        return value
+    return None
+
+
 def repair_action(
     role: str, action: Any, allowed_tools: set[str], repairs: Repairs, *, final_only: bool
 ) -> dict[str, Any]:
     """Normalize the action envelope, tool requests and payload shape for one role."""
-    if not isinstance(action, dict) or action.get("kind") == "invalid":
+    if isinstance(action, dict) and action.get("kind") == "invalid":
+        action = _embedded_json(action.get("raw_output"), repairs)
+    if not isinstance(action, dict):
         raise ValueError("action: response was not a JSON object; return a tagged JSON action")
     if set(action) == {"action"} and isinstance(action["action"], dict):
         repairs.add("action", "redundant action wrapper removed")

@@ -245,7 +245,7 @@ class OpenRouterModel:
             action = None
         if not isinstance(action, dict) or message.get("tool_calls"):
             # Invalid output is a correction turn, not a hidden provider retry. Retain usage.
-            action = {"kind": "invalid", "raw_output": content[:4096]}
+            action = {"kind": "invalid", "raw_output": content[:16384]}
         action = json.loads(self._redact(json.dumps(action)))
         return ModelResult(
             action=action,

@@ -38,20 +38,26 @@ async def demo(args) -> Path:
     with tempfile.TemporaryDirectory(prefix="ii-demo-") as directory:
         root = Path(directory)
         telemetry = root / "telemetry.jsonl"
-        app = create_app(telemetry_sink=JsonlTelemetrySink(telemetry))
+        # A simulated clock spaces baseline, fault and failing load seconds apart (ending
+        # before now), so before/after comparisons and change times are meaningful.
+        moment = [datetime.now(UTC) - timedelta(seconds=40)]
+        app = create_app(clock=lambda: moment[0], telemetry_sink=JsonlTelemetrySink(telemetry))
         # M1 metrics cover ten-second windows; include the whole baseline window.
-        start = datetime.now(UTC) - timedelta(seconds=11)
+        start = moment[0] - timedelta(seconds=11)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://lab"
             ) as client:
                 for _ in range(3):
+                    moment[0] += timedelta(seconds=2)
                     await client.post("/checkout")
+                moment[0] += timedelta(seconds=5)
                 response = await client.post("/admin/faults", json={"family": args.fault})
                 response.raise_for_status()
                 for _ in range(5):
+                    moment[0] += timedelta(seconds=2)
                     await client.post("/checkout")
-            cutoff = datetime.now(UTC)
+            cutoff = moment[0]
             source_root = root / "case"
             snapshot(
                 argparse.Namespace(

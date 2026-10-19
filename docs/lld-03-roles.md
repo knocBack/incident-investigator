@@ -37,7 +37,8 @@ its revision; Critic must review that exact revision. Every objection receives a
 Orchestrator disposition.
 
 Repair, don't reject: the runtime (`repair.py`) normalizes harmless deviations in every
-role's output before strict validation and never invents evidence. It drops unknown fields
+role's output before strict validation and never invents evidence. It extracts a JSON
+action wrapped in a markdown fence or prose, drops unknown fields
 and renames common argument aliases, defaults omitted nullable/list fields, coerces
 near-miss enums and action kinds, truncates over-long lists, drops tool requests a role may
 not use or whose arguments are invalid, sets initial-plan objection IDs to null and adds a

@@ -169,6 +169,27 @@ def test_tool_request_repairs_and_exact_field_rejection():
         repair_action("critic", final({"invalid": True}), set(), Repairs(), final_only=False)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '```json\n{"action": {"kind": "final", "result": {"summary": "s"}}}\n```',
+        'I have enough evidence.\n\n```json\n{"kind": "final", "result": {"summary": "s"}}\n```',
+        'Result: {"kind": "final", "result": {"summary": "s"}} done',
+    ],
+)
+def test_json_in_markdown_fence_or_prose_is_extracted(raw):
+    # Both live-smoke rejections were valid actions wrapped like this.
+    repairs = Repairs()
+    action = repair_action(
+        "critic", {"kind": "invalid", "raw_output": raw}, set(), repairs, final_only=False
+    )
+    assert action["kind"] == "final" and action["result"]["summary"] == "s"
+    assert repairs.items[0] == (
+        "action",
+        "JSON object extracted from markdown fence or surrounding text",
+    )
+
+
 def test_unknown_citations_are_dropped_and_claims_with_support_kept():
     repairs = Repairs()
     result = repair_result(
@@ -633,3 +654,29 @@ async def test_each_fault_is_discoverable_through_catalog_and_aggregates(tmp_pat
     assert series["after_split"]["mean"] > series["before_split"]["mean"]
     if fault in {"bad_configuration", "deployment_regression"}:
         assert discovered["changes"], "the change record is discoverable"
+
+
+async def test_demo_spaces_baseline_fault_and_load_in_time(tmp_path):
+    from incident_investigator import cli
+
+    directory = await cli.demo(
+        Namespace(
+            model="scripted",
+            script=Path("tests/scripted-demo.json"),
+            out=tmp_path,
+            fault="bad_configuration",
+        )
+    )
+    evidence = read_result(directory)["state"]["evidence"].values()
+    change = next(row for row in evidence if row["source"] == "changes")
+    requests = sorted(
+        row["event_time"]
+        for row in evidence
+        if row["source"] == "logs" and row["data"]["service"] == "inventory"
+    )
+    # Baseline requests precede the configuration change by whole seconds; load follows it.
+    assert requests and requests[0] < change["event_time"] < requests[-1]
+    gap = datetime.fromisoformat(change["event_time"]) - datetime.fromisoformat(
+        max(r for r in requests if r < change["event_time"])
+    )
+    assert gap >= timedelta(seconds=1)
