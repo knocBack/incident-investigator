@@ -9,6 +9,7 @@ Status: M0 scaffolding only.
 ```sh
 uv sync --locked
 uv run pytest
+uv run pre-commit install
 ```
 
 ## Docs
