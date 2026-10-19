@@ -321,6 +321,7 @@ class InventedPlanIds(Scenario):
         return await super().complete(messages, schema)
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_initial_plan_objection_ids_are_repaired_not_rejected(tmp_path):
     directory = await investigate(load_snapshot("dev-00"), InventedPlanIds(), tmp_path)
     result = read_result(directory)
@@ -340,6 +341,7 @@ async def test_initial_plan_objection_ids_are_repaired_not_rejected(tmp_path):
     assert result["usage"]["orchestrator"]["repairs"] == 2
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_missing_specialist_assignment_is_added(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"), InventedPlanIds(drop_dependency=True), tmp_path
@@ -354,6 +356,7 @@ async def test_missing_specialist_assignment_is_added(tmp_path):
     )
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_rejection_names_the_exact_field_and_rule(tmp_path):
     class BadConfidence(Scenario):
         async def complete(self, messages, schema):
@@ -512,6 +515,7 @@ class RepeatedQuery(Scenario):
         return await super().complete(messages, schema)
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_identical_normalized_query_is_answered_without_a_tool_call(tmp_path):
     model = RepeatedQuery(followup=False)
     directory = await investigate(load_snapshot("dev-00"), model, tmp_path)
@@ -538,6 +542,7 @@ async def test_identical_normalized_query_is_answered_without_a_tool_call(tmp_pa
     assert replay["page"]["observation_ids"]
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_specialists_see_budget_and_final_turn_is_final_only(tmp_path):
     model = Scenario(followup=False)
     await investigate(load_snapshot("dev-00"), model, tmp_path, limits=Limits(task_tool_calls=3))
@@ -557,6 +562,7 @@ async def test_specialists_see_budget_and_final_turn_is_final_only(tmp_path):
     assert "ProviderTools" not in second[1]["$defs"]
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_task_allowance_settles_the_task_not_the_run(tmp_path):
     directory = await investigate(
         load_snapshot("dev-00"),
@@ -591,6 +597,7 @@ def test_demo_live_profile_drives_call_and_wall_timeouts(monkeypatch):
     assert cli.model(Namespace(model="codex")).timeout_seconds == 90
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_demo_passes_the_live_profile_to_the_investigation(tmp_path, monkeypatch):
     from incident_investigator import cli
 
@@ -656,6 +663,7 @@ async def test_each_fault_is_discoverable_through_catalog_and_aggregates(tmp_pat
         assert discovered["changes"], "the change record is discoverable"
 
 
+@pytest.mark.usefixtures("runtime_graph")
 async def test_demo_spaces_baseline_fault_and_load_in_time(tmp_path):
     from incident_investigator import cli
 

@@ -135,7 +135,8 @@ def test_expectations_match_only_the_injected_lab_signature(family):
         )
 
 
-async def test_suite_scripted_real_lab_without_network(tmp_path, monkeypatch):
+@pytest.mark.parametrize("graph", ["current", "explicit"])
+async def test_suite_scripted_real_lab_without_network(tmp_path, monkeypatch, graph):
     import httpx
 
     def forbidden(*args, **kwargs):
@@ -149,12 +150,15 @@ async def test_suite_scripted_real_lab_without_network(tmp_path, monkeypatch):
         repeats=1,
         budget_usd="0",
         out=tmp_path / "batch",
+        graph=graph,
     )
     # Exhausted scripts test that real runtime failures stay in the leaderboard.
     board = await run_suite(args, model_factory=lambda _: ScriptedModel())
     assert sum(row["runs"] for row in board["models"]) == 5
     assert len(list(args.out.glob("*/expectation.json"))) == 5
     assert len(list(args.out.glob("*/grade.json"))) == 5
+    assert all(row["graph"] == graph for row in board["models"])
+    assert all(row["graph"] == graph for row in board["runs"])
 
 
 async def test_shared_budget_reservations_unknown_and_usage():
@@ -209,15 +213,18 @@ async def test_429_releases_bounded_reservation():
     assert guard.snapshot()["active"] == "0" and guard.unknown == 0
 
 
-async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path):
+@pytest.mark.parametrize("graph", ["current", "explicit"])
+async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path, graph):
     import asyncio
     import json
 
     started = asyncio.Event()
     active = 0
+    selected = []
 
     async def demo(args):
         nonlocal active
+        selected.append(args.graph)
         active += 1
         if active == 5:
             started.set()
@@ -235,10 +242,14 @@ async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path):
         concurrency=5,
         budget_usd="0",
         out=tmp_path / "batch",
+        graph=graph,
     )
     board = await run_suite(args, demo_fn=demo, model_factory=lambda _: ScriptedModel())
     assert len(board["runs"]) == 5
     assert len(list(args.out.glob("*/grade.json"))) == 5
+    assert selected == [graph] * 5
+    assert all(row["graph"] == graph for row in board["models"])
+    assert all(row["graph"] == graph for row in board["runs"])
 
 
 def test_pass_metrics_are_unbiased_estimators():
@@ -256,7 +267,8 @@ def test_price_bound_and_unpriced_fee():
         price_bound(info)
 
 
-async def test_suite_successful_script_is_reset_for_every_fault(tmp_path):
+@pytest.mark.parametrize("graph", ["current", "explicit"])
+async def test_suite_successful_script_is_reset_for_every_fault(tmp_path, graph):
     import json
 
     actions = json.loads(Path("tests/scripted-demo.json").read_text())
@@ -265,13 +277,18 @@ async def test_suite_successful_script_is_reset_for_every_fault(tmp_path):
         models="scripted",
         model="scripted",
         repeats=2,
+        concurrency=5,
         budget_usd="0",
         out=tmp_path / "batch",
+        graph=graph,
     )
     board = await run_suite(args, model_factory=lambda _: ScriptedModel(actions))
     assert sum(row["runs"] for row in board["models"]) == 10
     assert all(g["verdict"] == "inconclusive" for g in board["runs"])
     assert all(not g["process"]["failed_roles"] for g in board["runs"])
+    assert all(
+        json.loads(path.read_text())["graph"] == graph for path in args.out.glob("*/result.json")
+    )
 
 
 async def test_guarded_adapter_enforces_ceiling_and_retains_error_reservation():

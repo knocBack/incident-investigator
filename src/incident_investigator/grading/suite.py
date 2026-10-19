@@ -32,9 +32,13 @@ def _pass_metrics(n, correct, k):
 
 
 def _fault_metrics(items, k):
+    def fault_of(g):
+        # Standalone `eval` grades have a family but no suite job metadata.
+        return g.get("suite_attempt", {}).get("fault", g.get("family", "unknown"))
+
     metrics = {}
-    for fault in sorted({g["suite_attempt"]["fault"] for g in items}):
-        group = [g for g in items if g["suite_attempt"]["fault"] == fault]
+    for fault in sorted({fault_of(g) for g in items}):
+        group = [g for g in items if fault_of(g) == fault]
         correct = sum(g["verdict"] == "correct" for g in group)
         n = len(group)
         pass_at_k, pass_to_k = _pass_metrics(n, correct, min(k, n))
@@ -53,10 +57,10 @@ def leaderboard(grades, out, skipped=(), k=4):
     groups = {}
     for g in grades:
         models = g.get("models", {})
-        name = json.dumps(models, sort_keys=True)
+        name = (g.get("graph", "current"), json.dumps(models, sort_keys=True))
         groups.setdefault(name, []).append(g)
     rows = []
-    for name, items in groups.items():
+    for (graph, name), items in groups.items():
 
         def mean(field, items=items):
             values = [g["resources"]["totals"].get(field) for g in items]
@@ -68,6 +72,7 @@ def leaderboard(grades, out, skipped=(), k=4):
         rows.append(
             {
                 "models": json.loads(name),
+                "graph": graph,
                 "runs": len(items),
                 "verdicts": {
                     v: sum(g["verdict"] == v for g in items)
@@ -104,12 +109,12 @@ def leaderboard(grades, out, skipped=(), k=4):
         "",
         "No acceptance threshold. Missing measurements remain null. Citation grounding is a provenance proxy; human semantic review remains pending.",
         "",
-        "| Models | Runs | Verdicts | Pass metrics by fault | Grounding | Mean USD | Mean tokens in/out | Wall s | Failures |",
-        "| --- | ---: | --- | --- | --- | --- | --- | --- | ---: |",
+        "| Graph | Models | Runs | Verdicts | Pass metrics by fault | Grounding | Mean USD | Mean tokens in/out | Wall s | Failures |",
+        "| --- | --- | ---: | --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for r in rows:
         lines.append(
-            f"| {json.dumps(r['models'], sort_keys=True)} | {r['runs']} | {r['verdicts']} | {r['faults']} | {r['mean_grounding']} | {r['mean_cost']} | {r['mean_input_tokens']}/{r['mean_output_tokens']} | {r['mean_wall_seconds']} | {r['execution_failures']} |"
+            f"| {r['graph']} | {json.dumps(r['models'], sort_keys=True)} | {r['runs']} | {r['verdicts']} | {r['faults']} | {r['mean_grounding']} | {r['mean_cost']} | {r['mean_input_tokens']}/{r['mean_output_tokens']} | {r['mean_wall_seconds']} | {r['execution_failures']} |"
         )
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
@@ -147,6 +152,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     out.mkdir(parents=True, exist_ok=False)
     batch = {
         "version": "suite.v1",
+        "graph": getattr(args, "graph", "current"),
         "exposure": "development lab; exploratory",
         "faults": faults,
         "models": args.models.split(","),
@@ -233,6 +239,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                 out=out,
                                 fault=fault,
                                 _model_adapter=adapter,
+                                graph=batch["graph"],
                             )
                         )
                     except Exception as exc:
@@ -248,6 +255,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             },
                         )
                     g = grade_run(directory, expectation(fault))
+                    g["graph"] = batch["graph"]
                     g["resources"]["wall_seconds"] = time.monotonic() - started
                     g["suite_attempt"] = {"model": model_id, "repeat": repeat, "fault": fault}
                     if (directory / "attempt-error.json").exists():
@@ -273,6 +281,7 @@ def add_commands(sub):
     command.add_argument("--fault", choices=FAMILIES)
     command.add_argument("--out", type=Path)
     command = sub.add_parser("eval-suite")
+    command.add_argument("--graph", choices=["current", "explicit"], default="current")
     command.add_argument("--faults", default="all")
     command.add_argument("--model", choices=["openrouter", "scripted"], default="openrouter")
     command.add_argument("--models", required=True)

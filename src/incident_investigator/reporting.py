@@ -39,6 +39,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "schema_version": "m3.v1",
         "run_id": c["run_id"],
         "case_id": c["case_id"],
+        "graph": c.get("graph", "current"),
         "dataset_digest": snapshot.dataset_digest,
         "revision": c["revision"],
         "status": c["status"],

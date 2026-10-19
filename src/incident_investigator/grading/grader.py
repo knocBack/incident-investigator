@@ -167,6 +167,7 @@ def grade(result, expected, events=()):
         "expectation_version": expected["version"],
         "family": expected["family"],
         "run_id": result.get("run_id"),
+        "graph": result.get("graph", "current"),
         "verdict": verdict,
         "diagnosis_checks": {
             "culprit_service": service,

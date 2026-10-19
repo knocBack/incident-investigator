@@ -78,6 +78,7 @@ async def demo(args) -> Path:
                 getattr(args, "_model_adapter", None) or model(args),
                 args.out,
                 limits=profile(args),
+                graph=getattr(args, "graph", "current"),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -95,7 +96,14 @@ async def run(args) -> int:
         snapshots = [load_snapshot(case, roots) for case in args.case]
         runs = await asyncio.gather(
             *[
-                investigate(case, model(args), args.out, semaphore=semaphore, limits=profile(args))
+                investigate(
+                    case,
+                    model(args),
+                    args.out,
+                    semaphore=semaphore,
+                    limits=profile(args),
+                    graph=args.graph,
+                )
                 for case in snapshots
             ]
         )
@@ -114,6 +122,7 @@ def main() -> None:
     inspect.add_argument("run_dir", type=Path)
     for name in ("investigate", "demo"):
         command = sub.add_parser(name)
+        command.add_argument("--graph", choices=["current", "explicit"], default="current")
         command.add_argument(
             "--model", choices=["scripted", "codex", "openrouter"], default="scripted"
         )
