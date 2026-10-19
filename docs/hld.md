@@ -78,7 +78,7 @@ Timing and trace order may differ. For the same valid worker outputs, both compl
 
 ### Confirmed decision: retain unknown usage reservations and continue
 
-Prashanth selected **Keep reserve, continue** in the structured review on 2026-10-19. If a model call may have completed but its result and usage were not saved, retain the attempt's full reserved allowance. Continue or retry only within the original remaining execution limits. If another admissible attempt cannot fit, stop as resource-exhausted and preserve progress. Do not reset the allowance, treat missing usage as zero, or require manual review as the normal recovery path.
+The project owner selected **Keep reserve, continue** in the structured review on 2026-10-19. If a model call may have completed but its result and usage were not saved, retain the attempt's full reserved allowance. Continue or retry only within the original remaining execution limits. If another admissible attempt cannot fit, stop as resource-exhausted and preserve progress. Do not reset the allowance, treat missing usage as zero, or require manual review as the normal recovery path.
 
 Keep measured usage separate from capacity held for admission. An unknown attempt remains unknown in reports even when its full reservation is charged against admission. Admission counts known usage plus active and unresolved reservations; known usage and the reservation for the same attempt must not both be charged. Reconcile an unresolved reservation only from reliable usage evidence. A retry has a new attempt identity and its own allowance.
 
