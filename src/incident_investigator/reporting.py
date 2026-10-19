@@ -28,6 +28,8 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
             "known_cost": sum(cost for cost in costs if cost is not None),
             "model_calls": sum(call["kind"] == "model" for call in calls),
             "tool_calls": sum(call["kind"] == "tool" for call in calls),
+            "repairs": c.get("repairs", {}).get(role, 0),
+            "deduplicated_queries": c.get("deduplicated", {}).get(role, 0),
             **tokens,
             "latency_ms": round(sum(row.get("latency_ms", 0) for row in rows), 3),
         }
@@ -48,6 +50,7 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "hypotheses": reasoning.get("hypotheses", []),
         "report": report,
         "usage": usage,
+        "repairs": {role: row["repairs"] for role, row in usage.items()},
         "models": c["models"],
         "state": c,
         "receipts": inbox,
@@ -142,11 +145,11 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "",
         "## Per-role resource usage",
         "",
-        "| Role | Model | Model calls | Tool calls | Input tokens | Output tokens | Cost (provider) | Latency ms |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Role | Model | Model calls | Tool calls | Repairs | Input tokens | Output tokens | Cost (provider) | Latency ms |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for role, row in usage.items():
         lines += [
-            f"| {role} | {row['model']} | {row['model_calls']} | {row['tool_calls']} | {row['input_tokens']} | {row['output_tokens']} | {row['cost']} | {row['latency_ms']} |"
+            f"| {role} | {row['model']} | {row['model_calls']} | {row['tool_calls']} | {row['repairs']} | {row['input_tokens']} | {row['output_tokens']} | {row['cost']} | {row['latency_ms']} |"
         ]
     (out / "report.md").write_text("\n".join(lines) + "\n")

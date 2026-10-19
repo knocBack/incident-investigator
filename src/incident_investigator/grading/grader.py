@@ -215,7 +215,8 @@ def grade(result, expected, events=()):
                 e.get("event") == "validation" and e.get("outcome") == "rejected" for e in events
             ),
             "repaired_outputs": sum(
-                e.get("event") == "validation" and e.get("outcome") == "warning" for e in events
+                e.get("event") == "validation" and e.get("outcome") in {"warning", "repaired"}
+                for e in events
             ),
             "failed_roles": sorted(
                 {t["role"] for t in state.get("tasks", {}).values() if t.get("status") == "failed"}

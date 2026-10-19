@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from incident_investigator.contracts import PAYLOADS
+from incident_investigator.contracts import PAYLOADS, PROFILES
 from incident_investigator.models.adapter import ModelCallError, ModelResult, ModelUsage
 
 BASE_URL = "https://openrouter.ai/api/v1"
@@ -39,7 +39,7 @@ class OpenRouterModel:
     def __init__(
         self,
         *,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = PROFILES["demo-live"].call_seconds,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -61,6 +61,7 @@ class OpenRouterModel:
         self._free_only = os.environ.get("II_OPENROUTER_FREE_ONLY") == "1"
         self._catalog: dict[str, dict[str, Any]] | None = None
         self._catalog_lock = asyncio.Lock()
+        self._schema_rejected: set[str] = set()
 
     def model_for_role(self, role: str) -> str:
         return self._models[role]
@@ -101,6 +102,7 @@ class OpenRouterModel:
             raise ModelCallError(
                 f"OpenRouter HTTP {status} ({label}): {message}",
                 retryable=status in {408, 429} or status >= 500,
+                status=status,
             )
         if not isinstance(body, dict):
             raise ModelCallError("OpenRouter returned an invalid response envelope", retryable=True)
@@ -181,22 +183,37 @@ class OpenRouterModel:
                 ) as client,
             ):
                 info = await self._model_info(client, model)
-                structured = "structured_outputs" in info.get("supported_parameters", [])
-                request = self.build_request(messages, schema, model, structured=structured)
-                reasoning = info.get("reasoning")
-                if (
-                    "reasoning" in info.get("supported_parameters", [])
-                    and isinstance(reasoning, dict)
-                    and reasoning.get("mandatory") is False
-                ):
-                    request["reasoning"] = {"enabled": False}
-                body = self._response(
-                    await client.post(
-                        f"{BASE_URL}/chat/completions",
-                        headers={"Authorization": f"Bearer {self._key}"},
-                        json=request,
-                    )
+                structured = (
+                    "structured_outputs" in info.get("supported_parameters", [])
+                    and model not in self._schema_rejected
                 )
+                reasoning = info.get("reasoning")
+
+                async def post(structured: bool) -> dict:
+                    request = self.build_request(messages, schema, model, structured=structured)
+                    if (
+                        "reasoning" in info.get("supported_parameters", [])
+                        and isinstance(reasoning, dict)
+                        and reasoning.get("mandatory") is False
+                    ):
+                        request["reasoning"] = {"enabled": False}
+                    return self._response(
+                        await client.post(
+                            f"{BASE_URL}/chat/completions",
+                            headers={"Authorization": f"Bearer {self._key}"},
+                            json=request,
+                        )
+                    )
+
+                try:
+                    body = await post(structured)
+                except ModelCallError as exc:
+                    if not structured or exc.status != 400:
+                        raise
+                    # Providers may reject a large strict schema (complexity limits). JSON mode
+                    # keeps the same runtime validation; remember it for this model and run.
+                    self._schema_rejected.add(model)
+                    body = await post(False)
         except (TimeoutError, httpx.TimeoutException):
             raise ModelCallError("OpenRouter request timed out", retryable=True) from None
         except httpx.HTTPError as exc:

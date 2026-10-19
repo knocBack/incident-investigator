@@ -143,8 +143,11 @@ def create_app(
                 else (10.0 if "resource_exhaustion" in app.state.faults else 2.0)
             )
             metric(service, "pool_in_use", pool, "connections", "gauge", pool_size=pool)
+            # Worker saturation is visible as a gauge, not only in WARN log attributes.
+            active = 64.0 if "traffic_overload" in app.state.faults else 1.0
+            metric(service, "active_requests", active, "requests", "gauge", worker_limit=64)
 
-    def inventory_reserve(sku: str, request_id: str) -> tuple[bool, int]:
+    def inventory_reserve(sku: str, request_id: str) -> tuple[bool, int, float]:
         fault = app.state.faults
         if "resource_exhaustion" in fault:
             log(
@@ -156,11 +159,11 @@ def create_app(
                 pool_size=10,
             )
             metrics("inventory", 120.0, True, 100.0)
-            return False, 503
+            return False, 503, 120.0
         if "traffic_overload" in fault:
             log("inventory", "WARN", "worker concurrency saturated", request_id, active_requests=64)
             metrics("inventory", 180.0, True, 2.0)
-            return False, 503
+            return False, 503, 180.0
         db_ms = 2.0
         if "database_contention" in fault:
             db_ms = 250.0
@@ -189,14 +192,14 @@ def create_app(
                 db_timeout_ms=50,
             )
             metrics("inventory", 55.0, True, 55.0)
-            return False, 504
+            return False, 504, 55.0
         if db_ms > 100:
             time.sleep(0.001)
         row = database.execute("SELECT available FROM inventory WHERE sku = ?", (sku,)).fetchone()
         if row is None or row[0] < 1:
             log("inventory", "ERROR", "sku unavailable", request_id)
             metrics("inventory", db_ms + 2, True, db_ms)
-            return False, 409
+            return False, 409, db_ms + 2
         database.execute("UPDATE inventory SET available = available - 1 WHERE sku = ?", (sku,))
         database.commit()
         log(
@@ -207,8 +210,9 @@ def create_app(
             query_latency_ms=db_ms,
         )
         log("inventory", "INFO", "inventory reserved", request_id)
-        metrics("inventory", db_ms + rng.random(), False, db_ms)
-        return True, 200
+        latency = db_ms + rng.random()
+        metrics("inventory", latency, False, db_ms)
+        return True, 200, latency
 
     @app.on_event("startup")
     def startup() -> None:
@@ -223,8 +227,9 @@ def create_app(
     def checkout(sku: str = "widget") -> dict[str, Any]:
         request_id = f"req-{app.state.sequence + 1:06d}"
         log("checkout", "INFO", "checkout request received", request_id, sku=sku)
-        ok, status = inventory_reserve(sku, request_id)
-        latency = 5.0 if ok else 80.0
+        ok, status, downstream_ms = inventory_reserve(sku, request_id)
+        # Checkout latency includes the downstream reservation it waited for.
+        latency = downstream_ms + 3.0
         log(
             "checkout",
             "INFO" if ok else "ERROR",
