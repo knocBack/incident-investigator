@@ -107,7 +107,10 @@ def price_bound(info, *, max_input_tokens=64000, output_tokens=4096):
                 raise ValueError(f"unsupported nonzero catalogue price: {key}")
     # A prompt token is billed at one prompt/cache rate, never their sum.  Overrides
     # are tiered catalogue prices, so reserve the most expensive possible tier.
-    prompt = _rate(tiers, ("prompt", *[key for tier in tiers for key in tier if key.startswith("input_cache_")]))
+    prompt = _rate(
+        tiers,
+        ("prompt", *[key for tier in tiers for key in tier if key.startswith("input_cache_")]),
+    )
     completion = _rate(tiers, ("completion", "internal_reasoning"))
     prompt_tokens = min(amount(info["context_length"]), amount(max_input_tokens))
     return (prompt_tokens * prompt + amount(output_tokens) * completion) * D("1.10")

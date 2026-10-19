@@ -376,7 +376,12 @@ async def test_bounded_model_refuses_oversize_prompt_without_provider_request():
     model = adapter.model_for_role("orchestrator")
     bounded = BoundedModel(
         adapter,
-        {model: {"context_length": 1000, "pricing": {"prompt": ".000001", "completion": ".000002"}}},
+        {
+            model: {
+                "context_length": 1000,
+                "pricing": {"prompt": ".000001", "completion": ".000002"},
+            }
+        },
         SpendGuard(0, 1),
         max_input_tokens=10,
     )

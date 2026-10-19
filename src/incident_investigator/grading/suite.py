@@ -116,28 +116,28 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     out = args.out
     out.mkdir(parents=True, exist_ok=False)
     batch = {
-            "version": "suite.v1",
-            "exposure": "development lab; exploratory",
-            "faults": faults,
-            "models": args.models.split(","),
-            "repeats": args.repeats,
-            "budget_usd": args.budget_usd,
-            "max_input_tokens": max_input_tokens,
-            "run_order": "model, repeat, fault",
-            "settings": "runtime defaults; one selected model for all roles",
-            "prompt_hashes": {
-                p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in (Path(__file__).parents[1] / "prompts").glob("*.md")
-            },
-            "expectation_hashes": {
-                family: hashlib.sha256(
-                    json.dumps(expectation(family), sort_keys=True).encode()
-                ).hexdigest()
-                for family in faults
-            },
-            "started_at": time.time(),
-            "skipped": [],
-        }
+        "version": "suite.v1",
+        "exposure": "development lab; exploratory",
+        "faults": faults,
+        "models": args.models.split(","),
+        "repeats": args.repeats,
+        "budget_usd": args.budget_usd,
+        "max_input_tokens": max_input_tokens,
+        "run_order": "model, repeat, fault",
+        "settings": "runtime defaults; one selected model for all roles",
+        "prompt_hashes": {
+            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in (Path(__file__).parents[1] / "prompts").glob("*.md")
+        },
+        "expectation_hashes": {
+            family: hashlib.sha256(
+                json.dumps(expectation(family), sort_keys=True).encode()
+            ).hexdigest()
+            for family in faults
+        },
+        "started_at": time.time(),
+        "skipped": [],
+    }
     save(out / "batch.json", batch)
     grades = []
     guard = None
@@ -176,8 +176,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                         },
                                     )
                                     return leaderboard(grades, out, batch["skipped"])
-                                reason = None if guard.launch_allowed(bound) else (
-                                    "suite budget reservation cannot fit remaining budget"
+                                reason = (
+                                    None
+                                    if guard.launch_allowed(bound)
+                                    else ("suite budget reservation cannot fit remaining budget")
                                 )
                             if reason:
                                 skipped = {
