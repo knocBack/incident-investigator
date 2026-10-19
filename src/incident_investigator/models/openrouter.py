@@ -183,7 +183,12 @@ class OpenRouterModel:
                 info = await self._model_info(client, model)
                 structured = "structured_outputs" in info.get("supported_parameters", [])
                 request = self.build_request(messages, schema, model, structured=structured)
-                if "reasoning" in info.get("supported_parameters", []):
+                reasoning = info.get("reasoning")
+                if (
+                    "reasoning" in info.get("supported_parameters", [])
+                    and isinstance(reasoning, dict)
+                    and reasoning.get("mandatory") is False
+                ):
                     request["reasoning"] = {"enabled": False}
                 body = self._response(
                     await client.post(

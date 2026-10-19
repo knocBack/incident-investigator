@@ -110,7 +110,9 @@ catalogue per run, uses strict `response_format: json_schema` for supporting mod
 and uses JSON mode plus the same runtime validation/correction for other models.
 Provider parameter support is required and provider fallback is disabled. Each
 request has a hard 30-second timeout and a 4096-token output bound. Models with a
-reasoning switch have it disabled for this demo. There are no hidden HTTP retries;
+reasoning switch have it disabled only when the catalogue explicitly marks reasoning
+as optional (`reasoning.mandatory: false`); otherwise provider defaults apply.
+There are no hidden HTTP retries;
 the runtime retries eligible call failures once. Specialists see their remaining
 model-call allowance; their last permitted response schema allows a final result
 only, so they can summarize retrieved evidence rather than request another query.

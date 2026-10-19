@@ -32,6 +32,7 @@ def catalogue():
             {
                 "id": "test/schema:free",
                 "supported_parameters": ["structured_outputs", "response_format", "reasoning"],
+                "reasoning": {"mandatory": False},
                 "pricing": {"prompt": "0", "completion": "0"},
             },
             {
@@ -91,6 +92,22 @@ async def test_request_modes_usage_and_generation_id(configured, monkeypatch, st
     assert result.usage.input_tokens == 12 and result.usage.output_tokens == 7
     assert result.usage.cost == 0.001
     assert result.raw_id == "gen-mocked" and result.model == selected and result.latency_ms >= 0
+
+
+@pytest.mark.parametrize("reasoning", [{"mandatory": True}, {}, None])
+async def test_mandatory_or_unknown_reasoning_uses_provider_default(configured, reasoning):
+    def handler(request):
+        if request.method == "GET":
+            body = catalogue()
+            body["data"][0].pop("reasoning")
+            if reasoning is not None:
+                body["data"][0]["reasoning"] = reasoning
+            return httpx.Response(200, json=body)
+        assert "reasoning" not in json.loads(request.content)
+        return httpx.Response(200, json=response())
+
+    result = await OpenRouterModel(transport=httpx.MockTransport(handler)).complete(messages(), {})
+    assert result.usage.cost == 0.001
 
 
 @pytest.mark.parametrize("code,retryable", [(401, False), (402, False), (429, True), (503, True)])
