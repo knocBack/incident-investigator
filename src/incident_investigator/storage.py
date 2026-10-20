@@ -245,7 +245,9 @@ class RunRepository(ABC):
     def refresh(self) -> None: ...
 
     @abstractmethod
-    def runs(self, filters: dict | None = None, sort: str = "created") -> list[dict]: ...
+    def runs(self, filters: dict | None = None, sort: str = "created") -> list[dict]:
+        """List unique investigations, or retained evaluation attempts when filtering by suite."""
+        ...
 
     @abstractmethod
     def get(self, ident: str) -> dict | None: ...
@@ -263,6 +265,7 @@ class IndexedRunRepository(RunRepository):
     def __init__(self, artifacts: ArtifactStore):
         self.artifacts = artifacts
         self._runs, self._suites = [], []
+        self._suite_runs = {}
 
     def refresh(self):
         store = self.artifacts
@@ -363,13 +366,74 @@ class IndexedRunRepository(RunRepository):
                     "imported": prefix.startswith("_imports/"),
                 }
             )
+        # Suite membership belongs to retained evaluation records, independently of
+        # where the investigation lives or which grade is newest globally.
+        members = {s["id"]: {} for s in suites.values()}
+        by_location = {row["location"]: row for row in rows}
+        by_run_id = {row["run_id"]: row for row in rows}
+        for row in rows:
+            if row["suite"]:
+                members[row["suite"]][row["location"]] = {
+                    **row,
+                    "grade": {},
+                    "verdict": "ungraded",
+                }
+        for key in keys:
+            if not key.endswith("/grade.json"):
+                continue
+            prefix = key.rsplit("/", 1)[0]
+            suite = suite_for(prefix)
+            if suite is None:
+                continue
+            grade = store.json(key)
+            location = store.location(prefix)
+            source = by_location.get(location) or by_run_id.get(grade.get("run_id"))
+            if source is None and not grade.get("run_id"):
+                continue
+            models = grade.get("models", (source or {}).get("models", {}))
+            resources = grade.get("resources", {})
+            totals = resources.get("totals", {})
+            attempt = {
+                "id": None,
+                "run_id": grade.get("run_id", "unknown"),
+                "case": "not indexed",
+                "created": 0,
+                "created_at": "unknown",
+                "cost": None,
+                "input_tokens": None,
+                "output_tokens": None,
+                "wall_seconds": None,
+                "calls": (totals.get("model_calls") or 0) + (totals.get("tool_calls") or 0),
+                "events": 0,
+                "status": "unknown",
+                **(source or {}),
+                "grade": grade,
+                "fault": grade.get("family", (source or {}).get("fault", "unknown")),
+                "verdict": grade.get("verdict", "ungraded"),
+                "models": models,
+                "model": ", ".join(sorted(set(models.values()))),
+                "graph": recorded_graph(grade.get("graph", (source or {}).get("graph"))),
+                "suite": suite["id"],
+                "suite_name": suite["name"],
+            }
+            for field in ("cost", "input_tokens", "output_tokens"):
+                if field in totals:
+                    attempt[field] = totals[field]
+            if "wall_seconds" in resources:
+                attempt["wall_seconds"] = resources["wall_seconds"]
+            if grade.get("process", {}).get("execution_status"):
+                attempt["status"] = grade["process"]["execution_status"]
+            members[suite["id"]][location] = attempt
         self._runs, self._suites = rows, list(suites.values())
-        store.save_json("index.json", {"runs": rows, "suites": self._suites})
+        self._suite_runs = {ident: list(attempts.values()) for ident, attempts in members.items()}
+        store.save_json(
+            "index.json", {"runs": rows, "suites": self._suites, "suite_runs": self._suite_runs}
+        )
 
     def runs(self, filters=None, sort="created"):
-        rows = [
-            r for r in self._runs if all(not v or r.get(k) == v for k, v in (filters or {}).items())
-        ]
+        filters = filters or {}
+        source = self._suite_runs.get(filters["suite"], []) if filters.get("suite") else self._runs
+        rows = [r for r in source if all(not v or r.get(k) == v for k, v in filters.items())]
         if sort not in {"created", "cost", "wall_seconds", "verdict"}:
             sort = "created"
         return sorted(rows, key=lambda r: (r.get(sort) is not None, r.get(sort) or 0), reverse=True)

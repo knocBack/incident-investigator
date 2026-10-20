@@ -149,6 +149,54 @@ def test_grade_overlay_uses_newest_timestamp(repo):
     assert repo.runs.runs()[0]["verdict"] == "inconclusive"
 
 
+def test_each_suite_uses_its_retained_grade_without_duplicating_investigation(repo):
+    store = repo.artifacts
+    store.save_json("suites/original/result/result.json", {"run_id": "same-investigation"})
+    for index, (suite, verdict) in enumerate(
+        (("original", "wrong"), ("regrade-one", "partial"), ("regrade-two", "correct")), start=1
+    ):
+        store.save_json(f"suites/{suite}/leaderboard.json", {})
+        store.save_json(
+            f"suites/{suite}/result/grade.json",
+            {
+                "run_id": "same-investigation",
+                "family": "fault",
+                "verdict": verdict,
+                "graded_at": index,
+                "models": {"critic": "test/model"},
+                "graph": "staged",
+                "resources": {"totals": {"cost": index / 100}},
+            },
+        )
+    repo.runs.refresh()
+    assert len(repo.runs.runs()) == 1
+    assert repo.runs.runs()[0]["verdict"] == "correct"
+    for suite in repo.runs.suites():
+        rows = repo.runs.runs({"suite": suite["id"]})
+        assert len(rows) == 1
+        assert rows[0]["id"] == repo.runs.runs()[0]["id"]
+        expected = {"original": "wrong", "regrade-one": "partial", "regrade-two": "correct"}
+        assert rows[0]["verdict"] == expected[suite["name"]]
+        assert suite_metrics(rows, 1)[0]["n"] == 1
+    # Retained grades still contribute metrics if their investigation isn't imported.
+    store.save_json("suites/grade-only/leaderboard.json", {})
+    store.save_json(
+        "suites/grade-only/record/grade.json",
+        {"run_id": "not-imported", "family": "orphan", "verdict": "correct"},
+    )
+    repo.runs.refresh()
+    suite = next(s for s in repo.runs.suites() if s["name"] == "grade-only")
+    rows = repo.runs.runs({"suite": suite["id"]})
+    assert len(rows) == 1 and rows[0]["id"] is None
+    assert suite_metrics(rows, 1)[0]["pass1"] == 1
+    assert len(repo.runs.runs()) == 1
+    with TestClient(create_console(repo)) as client:
+        page = client.get(f"/suites/{suite['id']}")
+        assert page.status_code == 200
+        assert "Report not indexed" in page.text
+        assert "/runs/None" not in page.text
+
+
 @pytest.mark.parametrize("command", [["demo"], ["investigate", "--case", "missing"]])
 def test_cli_rejects_missing_script_before_creating_artifacts(
     command, monkeypatch, tmp_path, capsys
@@ -384,6 +432,24 @@ def test_real_cli_job_stream_and_default_workspace(tmp_path):
         assert (
             len(repo.runs.runs()) == 1
         )  # Staged evaluator input must never be indexed as a new run.
+        grading_suite = next(
+            s for s in repo.runs.suites() if s["name"] == f"eval-{grading.json()['id']}"
+        )
+        attempts = repo.runs.runs({"suite": grading_suite["id"]})
+        assert len(attempts) == 1
+        assert attempts[0]["run_id"] == run["run_id"]
+        assert attempts[0]["verdict"] == "inconclusive"
+        assert suite_metrics(attempts, 1)[0]["n"] == 1
+        page = client.get(f"/suites/{grading_suite['id']}?k=1")
+        assert page.status_code == 200
+        assert "1 / 0" in page.text and "0.000" in page.text
+        assert "No runs found" not in page.text
+        assert f"/runs/{run['id']}" in page.text
+        comparison = client.get("/compare", params={"kind": "suites", "left": grading_suite["id"]})
+        assert comparison.status_code == 200
+        import re
+
+        assert re.search(r"<span>runs</span>\s*<span>\s*1\s*</span>", comparison.text)
 
 
 def test_storage_publish_and_materialize_contract(repo, tmp_path):

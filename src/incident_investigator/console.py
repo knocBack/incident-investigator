@@ -118,6 +118,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         }
         rows = repo.runs.runs(filters, request.query_params.get("sort", "created"))
         options = {k: sorted({r[k] for r in repo.runs.runs() if r[k]}) for k in filters}
+        options["suite"] = sorted(s["id"] for s in repo.runs.suites())
         return render(
             request,
             "runs.html",

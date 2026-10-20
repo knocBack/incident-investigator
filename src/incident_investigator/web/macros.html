@@ -41,7 +41,11 @@
                 {% for r in rows %}
                     <tr>
                         <td>
-                            <a class="run-link" href="/runs/{{ r.id }}">{{ r.fault }}</a>
+                            {% if r.id %}
+                                <a class="run-link" href="/runs/{{ r.id }}">{{ r.fault }}</a>
+                            {% else %}
+                                {{ r.fault }}<small>Report not indexed</small>
+                            {% endif %}
                             <small class="mono">{{ r.run_id[:8] }} · {{ r.case }}</small>
                             <small>{{ r.created_at }}</small>
                         </td>
