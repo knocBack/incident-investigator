@@ -13,6 +13,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from uuid import uuid4
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import NodeCancelledError
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from incident_investigator.contracts import (
@@ -26,6 +27,13 @@ from incident_investigator.contracts import (
 )
 from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
 from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
+from incident_investigator.reliability import (
+    invocation_lock,
+    resume_metadata,
+    runner_capacity,
+    save_source,
+    versions,
+)
 from incident_investigator.repair import (
     Repairs,
     Scope,
@@ -36,7 +44,7 @@ from incident_investigator.repair import (
 from incident_investigator.sources.loader import CaseSnapshot
 from incident_investigator.tools import DESCRIPTIONS, build_registry, query_identity
 from incident_investigator.tools.contracts import QUERY_MODELS, ToolPage
-from incident_investigator.tools.core import describe_validation
+from incident_investigator.tools.core import UNBOUNDED_START, describe_validation
 from incident_investigator.tools.faults import FaultSelection, apply_fault
 
 
@@ -80,6 +88,7 @@ class Call(Record):
     role: Role
     kind: Literal["model", "tool"]
     request: dict[str, Any]
+    invocation_id: str | None = None
     retry: int = 0
     retry_of: str | None = None
     fault: dict[str, Any] | None = None
@@ -92,7 +101,9 @@ class Control(Record):
     limits: Limits
     graph: GraphVariant = DEFAULT_GRAPH
     revision: int = 0
-    status: Literal["running", "completed", "failed", "resource_exhausted"] = "running"
+    status: Literal[
+        "running", "completed", "inconclusive", "interrupted", "failed", "resource_exhausted"
+    ] = "running"
     stop_reason: str | None = None
     partial: bool = False
     models: dict[str, str] = Field(default_factory=dict)
@@ -206,6 +217,7 @@ class Investigation:
         self.registry = build_registry(snapshot)
         self.faults = faults or {}
         self.variant = graph
+        self.invocation_id = identity()
         self.started = time.monotonic()
         self.deadline = self.started + limits.wall_seconds
         self.adapters = {role: TypeAdapter(action_type(body)) for role, body in PAYLOADS.items()}
@@ -382,7 +394,7 @@ class Investigation:
                     lower = (
                         point(arguments["start"])
                         if arguments.get("start")
-                        else (None if name == "history" else self.snapshot.alert_start)
+                        else (None if name in UNBOUNDED_START else self.snapshot.alert_start)
                     )
                     upper = (
                         point(arguments["end"]) if arguments.get("end") else self.snapshot.cutoff
@@ -445,6 +457,7 @@ class Investigation:
             role=task.role,
             kind=kind,
             request=json.loads(json.dumps(request)),
+            invocation_id=self.invocation_id,
             retry=retry,
             retry_of=retry_of,
             query=query,
@@ -467,6 +480,9 @@ class Investigation:
     def accept(self, c: Control, call: Call, receipt: dict) -> None:
         task = c.tasks[call.task_id]
         task.pending.remove(call.call_id)
+        if receipt.get("replay_blocked"):
+            # Unknown prior execution retains its charge; a successor is a new attempt.
+            task.attempt_id = identity()
         if receipt.get("error"):
             if call.retry < c.limits.call_retries and receipt.get("retryable", True):
                 self.admit(
@@ -509,7 +525,10 @@ class Investigation:
             observations = payload["observations"] if payload else []
             if summary is not None:
                 summary["observation_ids"] = [row["evidence_id"] for row in observations]
+            if not payload or payload["source_status"] != "complete":
+                c.partial = True
             c.tool_receipts[call.call_id] = {
+                "source_status": payload["source_status"] if payload else "failed",
                 "tool": call.request["name"],
                 "error": receipt.get("error"),
                 "page": summary,
@@ -760,7 +779,9 @@ class Investigation:
         """The shared authoritative receipt commit and deadline check."""
         c = Control.model_validate(state["control"])
         c.dispatch = []
-        for call_id, receipt in state.get("inbox", {}).items():
+        # Saved completions win before an unresolved/error receipt can exhaust retries.
+        receipts = state.get("inbox", {}).items()
+        for call_id, receipt in sorted(receipts, key=lambda item: bool(item[1].get("error"))):
             if call_id in c.processed:
                 continue
             c.processed.append(call_id)
@@ -798,11 +819,25 @@ class Investigation:
 
     async def execute(self, state: dict) -> dict:
         call = Call.model_validate(state["call"])
+        if call.invocation_id is not None and call.invocation_id != self.invocation_id:
+            return {
+                "inbox": {
+                    call.call_id: {
+                        "payload": None,
+                        "error": "prior invocation completion unknown",
+                        "replay_blocked": True,
+                        "retryable": True,
+                        "usage": None,
+                    }
+                }
+            }
         started = time.monotonic()
         receipt = {"payload": None, "error": None, "usage": None}
         try:
             async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
-                async with self.semaphore:
+                async with runner_capacity(), self.semaphore:
+                    if time.monotonic() >= self.deadline:
+                        raise TimeoutError("run deadline expired before dispatch")
                     timeout = min(
                         self.limits.call_seconds, max(0.001, self.deadline - time.monotonic())
                     )
@@ -851,6 +886,11 @@ class Investigation:
                             fault = FaultSelection(**call.fault)
                             page = await apply_fault(query, fault, timeout_seconds=timeout)()
                             receipt["payload"] = page.model_dump(mode="json")
+                            if page.source_status == "failed":
+                                receipt["error"] = (
+                                    page.error.message if page.error else "source unavailable"
+                                )
+                                receipt["retryable"] = page.error.retryable if page.error else True
         except Exception as exc:
             receipt["error"] = f"{type(exc).__name__}: {exc}"
             receipt["retryable"] = getattr(exc, "retryable", True)
@@ -880,8 +920,38 @@ class Investigation:
         return build_staged_graph(self)
 
 
+def model_names(model: ModelAdapter) -> dict[str, str]:
+    resolve = getattr(model, "model_for_role", None)
+    return {
+        role: resolve(role)
+        if resolve
+        else "scripted"
+        if isinstance(model, ScriptedModel)
+        else "gpt-6-luna"
+        if isinstance(model, CodexExecModel)
+        else type(model).__name__
+        for role in PAYLOADS
+    }
+
+
+async def saved_progress(compiled, config) -> dict | None:
+    """Include the active nested stage when exporting interrupted progress."""
+    saved = await compiled.aget_state(config, subgraphs=True)
+    states = []
+
+    def visit(state):
+        if isinstance(state.values, dict) and "control" in state.values:
+            states.append(state.values)
+        for task in state.tasks:
+            if task.state is not None and hasattr(task.state, "values"):
+                visit(task.state)
+
+    visit(saved)
+    return max(states, key=lambda state: state["control"]["revision"]) if states else None
+
+
 async def investigate(
-    snapshot: CaseSnapshot,
+    snapshot: CaseSnapshot | None,
     model: ModelAdapter,
     out: Path = Path("runs"),
     *,
@@ -889,55 +959,104 @@ async def investigate(
     semaphore: asyncio.Semaphore | None = None,
     faults: dict[str, FaultSelection] | None = None,
     graph: GraphVariant = DEFAULT_GRAPH,
+    resume: Path | None = None,
 ) -> Path:
-    """Run one fresh investigation. Each run owns its graph, files and fault counters."""
+    """Start or resume one fenced investigation under its original finite limits."""
+    from langsmith import tracing_context
+
     from incident_investigator.reporting import export_report
 
     if graph not in {"hub", "staged"}:
         raise ValueError(f"unknown graph: {graph}")
-    limits = limits or Limits()
-    run_id = identity()
-    run_dir = out / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
-    runner = Investigation(
-        snapshot,
-        model,
-        run_dir,
-        limits,
-        semaphore or asyncio.Semaphore(4),
-        faults=faults,
-        graph=graph,
-    )
-    resolve_model = getattr(model, "model_for_role", None)
-    models = {
-        role: (
-            resolve_model(role)
-            if resolve_model
-            else "scripted"
-            if isinstance(model, ScriptedModel)
-            else "gpt-6-luna"
-            if isinstance(model, CodexExecModel)
-            else type(model).__name__
-        )
-        for role in PAYLOADS
-    }
-    initial = Control(
-        run_id=run_id, case_id=snapshot.case_id, limits=limits, models=models, graph=graph
-    )
-    async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
-        graph = runner.graph().compile(checkpointer=saver)
-        # callbacks=[] alone cannot override LANGSMITH_TRACING inherited by native tools.
-        from langsmith import tracing_context
-
-        with tracing_context(enabled=False):
-            result = await graph.ainvoke(
-                {"control": initial.model_dump(mode="json"), "inbox": {}},
-                config={
-                    "configurable": {"thread_id": run_id},
-                    "callbacks": [],
-                    "recursion_limit": 1000,
+    run_dir = Path(resume) if resume else out / identity()
+    if not resume:
+        run_dir.mkdir(parents=True, exist_ok=False)
+    with invocation_lock(run_dir):
+        models = model_names(model)
+        if resume:
+            metadata, restored = resume_metadata(run_dir)
+            if snapshot is not None and snapshot.dataset_digest != restored.dataset_digest:
+                raise ValueError("incompatible resume dataset")
+            snapshot = restored
+            if models != metadata["models"]:
+                raise ValueError("incompatible resume model configuration")
+            if limits is not None and limits.model_dump() != metadata["limits"]:
+                raise ValueError("resume must retain saved limits")
+            limits = Limits.model_validate(metadata["limits"])
+            graph = metadata["graph"]
+            faults = {key: FaultSelection(**value) for key, value in metadata["faults"].items()}
+        else:
+            if snapshot is None:
+                raise ValueError("a snapshot is required for a fresh investigation")
+            limits = limits or Limits()
+            metadata = {
+                "run_id": run_dir.name,
+                "case_id": snapshot.case_id,
+                "limits": limits.model_dump(),
+                "graph": graph,
+                "models": models,
+                "deadline_at": time.time() + limits.wall_seconds,
+                "versions": versions(snapshot),
+                "faults": {
+                    key: {
+                        "outcome": value.outcome,
+                        "keep_first": value.keep_first,
+                        "rule_id": value.rule_id,
+                    }
+                    for key, value in (faults or {}).items()
                 },
-                durability="sync",
-            )
-    export_report(result, snapshot, run_dir)
+            }
+            save_source(snapshot, run_dir)
+            (run_dir / "run.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        runner = Investigation(
+            snapshot,
+            model,
+            run_dir,
+            limits,
+            semaphore or asyncio.Semaphore(4),
+            faults=faults,
+            graph=graph,
+        )
+        runner.deadline = time.monotonic() + max(0, metadata["deadline_at"] - time.time())
+        initial = Control(
+            run_id=metadata["run_id"],
+            case_id=snapshot.case_id,
+            limits=limits,
+            models=models,
+            graph=graph,
+        )
+        config = {
+            "configurable": {"thread_id": metadata["run_id"]},
+            "callbacks": [],
+            "recursion_limit": 1000,
+        }
+        async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
+            compiled = runner.graph().compile(checkpointer=saver)
+            try:
+                with tracing_context(enabled=False):
+                    result = await compiled.ainvoke(
+                        None
+                        if resume
+                        else {"control": initial.model_dump(mode="json"), "inbox": {}},
+                        config=config,
+                        durability="sync",
+                    )
+            except BaseException as exc:
+                # Export is derived; the checkpoint remains resumable at its last durable boundary.
+                progress = await saved_progress(compiled, config)
+                if progress:
+                    progress = copy.deepcopy(progress)
+                    c = progress["control"]
+                    c["status"] = (
+                        "interrupted"
+                        if isinstance(
+                            exc, asyncio.CancelledError | KeyboardInterrupt | NodeCancelledError
+                        )
+                        else "failed"
+                    )
+                    c["partial"] = True
+                    c["stop_reason"] = c["status"]
+                    export_report(progress, snapshot, run_dir)
+                raise
+        export_report(result, snapshot, run_dir)
     return run_dir

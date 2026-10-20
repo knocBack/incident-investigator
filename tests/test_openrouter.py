@@ -250,8 +250,9 @@ async def test_mocked_api_investigation_records_role_models_cost_and_no_credenti
     )
     assert "test/json:free" in (directory / "report.md").read_text()
     assert "Cost (provider)" in (directory / "report.md").read_text()
-    for path in directory.iterdir():
-        assert TEST_KEY.encode() not in path.read_bytes()
+    for path in directory.rglob("*"):
+        if path.is_file():
+            assert TEST_KEY.encode() not in path.read_bytes()
     assert len(calls) == 8
 
 
@@ -274,8 +275,9 @@ async def test_runtime_owns_retry_policy_and_scrubs_provider_errors(
     result = json.loads((directory / "result.json").read_text())
     assert result["status"] == "failed"  # Reporting also receives the provider failure.
     assert calls == expected_calls
-    for path in directory.iterdir():
-        assert TEST_KEY.encode() not in path.read_bytes()
+    for path in directory.rglob("*"):
+        if path.is_file():
+            assert TEST_KEY.encode() not in path.read_bytes()
 
 
 @pytest.mark.live
@@ -378,3 +380,33 @@ async def test_rejected_strict_schema_falls_back_to_json_mode_once(configured):
     assert first.action["action"]["kind"] == second.action["action"]["kind"] == "final"
     # The rejected schema mode is remembered: later calls go straight to JSON mode.
     assert modes == ["json_schema", "json_object", "json_object"]
+
+
+async def test_failed_json_fallback_does_not_disable_strict_mode(configured):
+    modes = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=catalogue())
+        mode = json.loads(request.content)["response_format"]["type"]
+        modes.append(mode)
+        if len(modes) <= 2:
+            return httpx.Response(400, json={"error": {"code": 400}})
+        return httpx.Response(200, json=response())
+
+    model = OpenRouterModel(transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelCallError):
+        await model.complete(messages(), {})
+    await model.complete(messages(), {})
+    assert modes == ["json_schema", "json_object", "json_schema"]
+
+
+@pytest.mark.parametrize(
+    "body", [[], None, {}, {"choices": {}}, {"choices": [None]}, {"choices": [{"message": []}]}]
+)
+async def test_malformed_provider_envelope_is_a_model_error(configured, body):
+    def handler(request):
+        return httpx.Response(200, json=catalogue() if request.method == "GET" else body)
+
+    with pytest.raises(ModelCallError, match="invalid"):
+        await OpenRouterModel(transport=httpx.MockTransport(handler)).complete(messages(), {})

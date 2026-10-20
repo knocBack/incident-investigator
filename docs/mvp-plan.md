@@ -181,7 +181,9 @@ Completed (checkpoint 2026-10-19): PRD, HLD and LLD documents; the fault-injecti
 
 In testing: the local eval console with live Arize Phoenix traces.
 
-Not completed: M4 reliability hardening (public resume, crash/replay, tool-failure recovery), the ten-incident benchmark with two reliability variants, the single-agent baseline, the single-versus-multi comparison, pass@4 measurement, and a validated diagnostic threshold. Results so far are exploratory (see the README).
+M4 reliability shipped (2026-10-20): public checkpoint resume with immutable source/version metadata, original deadlines and consumed allowances; process invocation fencing; replay guards with fresh retry identities; bounded transient tool recovery and explicit partial/unavailable sources; shared local-runner call capacity; and distinct execution/diagnostic stop categories. Scripted tests cover interruption, SIGKILL followed by fresh-process recovery, retained sibling responses, version refusal, expired deadlines, faults and concurrent runs. Evaluator expectations are included in installed wheels, outside runtime sources. Paid recovery smoke was skipped; verification used scripted and mocked adapters.
+
+Not completed: the ten-incident benchmark with two reliability variants, the single-agent baseline, the single-versus-multi comparison, pass@4 measurement, and a validated diagnostic threshold. Results so far are exploratory (see the README).
 
 ## Design evidence
 

@@ -11,7 +11,10 @@ from pathlib import Path
 from incident_investigator.graph_config import recorded_graph
 
 VERSION = "grader.v1"
-EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
+# Wheels ship evaluator data inside the grading package, outside retrieval sources.
+EXPECTED = Path(__file__).parent / "expected"
+if not EXPECTED.is_dir():
+    EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
 FAMILIES = tuple(sorted(p.stem for p in (EXPECTED / "faults").glob("*.json")))
 
 
