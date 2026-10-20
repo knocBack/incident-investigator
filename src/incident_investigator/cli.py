@@ -180,7 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    if args.command in {"demo", "investigate"} and args.model == "scripted" and not args.script:
+    if (
+        args.command in {"demo", "investigate"}
+        and args.model == "scripted"
+        and not args.script
+        and not getattr(args, "resume", None)
+    ):
         parser.error("the scripted model requires --script; supply it or select another --model")
     if getattr(args, "trace", None) == "phoenix":
         os.environ["II_PHOENIX"] = "1"
