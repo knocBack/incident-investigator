@@ -17,9 +17,12 @@
     <span class="button small muted">Phoenix · not captured</span>
 {% endif %}
 <a class="button small" href="/run?grade={{ run.id }}">Grade this run</a>
+{% if run.launch_id %}<a class="button small" href="/jobs/{{ run.launch_id|urlencode }}">Watch job</a>{% endif %}
 </div>
 </div>
 <p class="page-note">{{ run.location }} · Cost USD {{ m.value(run.cost) }} · {{ run.calls }} calls · {{ run.events }} trace events · wall {{ m.value(run.wall_seconds) }}s</p>
+{% if run.model == 'scripted' %}<div class="callout info">Canned pipeline replay for testing the console. It uses fixed responses; inconclusive is expected.</div>{% endif %}
+{% if run.status in ['unfinished', 'running'] %}<div class="callout info">This investigation is still running. The report is being prepared; refresh after completion, watch the job, or open captured Phoenix traces.</div>{% endif %}
 <div class="tabs">
     {% for name in ['report','grade','rubric','evidence'] %}
         <a class="button {% if name == tab %}primary{% endif %}"

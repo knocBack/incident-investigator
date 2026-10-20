@@ -11,13 +11,7 @@ def build_single_graph(runner):
 
     def begin(state):
         c = Control.model_validate(state["control"])
-        c.stage = "single"
-        task = runner.task(
-            c,
-            "single",
-            "Investigate the alert, test alternatives, and report the supported cause or justified uncertainty.",
-        )
-        c.batch = [task]
+        runner.start_single(c)
         return {"control": c.model_dump(mode="json")}
 
     def commit(state):

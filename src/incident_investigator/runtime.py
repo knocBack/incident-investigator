@@ -201,6 +201,30 @@ def _provider_schema(role: str, allow_tools: bool) -> dict:
     }
 
 
+def model_input(role, request):
+    """Render the same bounded input for execution and the console cost preview."""
+    remaining = request.get("remaining_model_calls_after_this", 1)
+    tools_left = request.get("remaining_tool_calls", 1)
+    schema = provider_schema(role, allow_tools=remaining > 0 and tools_left > 0)
+    messages = [
+        *request["messages"],
+        {
+            "role": "user",
+            "content": (
+                'Return the tagged action as JSON under the "action" wrapper. '
+                "You have NO native or callable tools. Prior user messages contain "
+                "the real registry tool results. Read them and advance the investigation; "
+                "do not repeat a completed query without a new evidence question. "
+                "Return final findings once you have enough evidence, including gaps. "
+                f"Budget: {remaining} task model calls remain after this "
+                f"response; {tools_left} tool calls remain. "
+                "If either is 0, return a final result now, not more tools."
+            ),
+        },
+    ]
+    return messages, schema
+
+
 class Investigation:
     def __init__(
         self,
@@ -719,6 +743,16 @@ class Investigation:
             )
         ]
 
+    def start_single(self, c: Control) -> None:
+        c.stage = "single"
+        c.batch = [
+            self.task(
+                c,
+                "single",
+                "Investigate the alert, test alternatives, and report the supported cause or justified uncertainty.",
+            )
+        ]
+
     def plan(self, c: Control) -> None:
         c.stage = "plan"
         c.batch = [
@@ -896,27 +930,7 @@ class Investigation:
                     )
                     async with asyncio.timeout(timeout):
                         if call.kind == "model":
-                            remaining = call.request.get("remaining_model_calls_after_this", 1)
-                            tools_left = call.request.get("remaining_tool_calls", 1)
-                            schema = provider_schema(
-                                call.role, allow_tools=remaining > 0 and tools_left > 0
-                            )
-                            messages = [
-                                *call.request["messages"],
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        'Return the tagged action as JSON under the "action" wrapper. '
-                                        "You have NO native or callable tools. Prior user messages contain "
-                                        "the real registry tool results. Read them and advance the investigation; "
-                                        "do not repeat a completed query without a new evidence question. "
-                                        "Return final findings once you have enough evidence, including gaps. "
-                                        f"Budget: {remaining} task model calls remain after this "
-                                        f"response; {tools_left} tool calls remain. "
-                                        "If either is 0, return a final result now, not more tools."
-                                    ),
-                                },
-                            ]
+                            messages, schema = model_input(call.role, call.request)
                             self.observer.input(span, messages)
                             result = await self.model.complete(messages, schema)
                             receipt["payload"] = result.action.get("action", result.action)

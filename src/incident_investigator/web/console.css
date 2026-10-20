@@ -509,6 +509,10 @@ details pre {
 .error-text {
   color: var(--red);
 }
+.terminal a {
+  color: #9bdccb;
+  text-decoration: underline;
+}
 .terminal {
   background: #142331;
   color: #c2d9cb;

@@ -5,8 +5,8 @@
         <meta name="viewport" content="width=device-width,initial-scale=1">
         <meta name="console-token" content="{{ token }}">
         <title>{% block title %}Incident Investigator{% endblock %}</title>
-        <link rel="stylesheet" href="/static/console.css">
-        <script src="/static/console.js" defer></script>
+        <link rel="stylesheet" href="/static/console.css?v={{ asset_version }}">
+        <script src="/static/console.js?v={{ asset_version }}" defer></script>
     </head>
     <body>
         <div class="layout">

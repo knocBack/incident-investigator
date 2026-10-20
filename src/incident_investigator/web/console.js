@@ -53,6 +53,8 @@ const form = document.getElementById("run-form");
 if (form && form.dataset.enabled === "yes") {
   const error = document.getElementById("run-error"),
     preview = document.getElementById("command-preview");
+  const launch = document.getElementById("launch-job");
+  let launching = false;
   function body() {
     const data = new FormData(form);
     return {
@@ -79,13 +81,20 @@ if (form && form.dataset.enabled === "yes") {
   let previewVersion = 0;
   async function update() {
     const version = ++previewVersion;
+    launch.disabled = true;
+    document.getElementById("reservation-estimate").textContent = form.elements.provider.value === "openrouter" ? "Checking model prices and initial-call reservation..." : "This replay makes no model calls.";
+    document.getElementById("replay-note").hidden = form.elements.provider.value !== "scripted" || form.elements.command.value === "eval";
     try {
       const result = await post("/api/preview", body());
       if (version === previewVersion) {
         preview.textContent = result.command;
         document.getElementById("job-limit").textContent =
           `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
-        error.textContent = "";
+        document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
+          ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
+          : `Estimated initial per-call reservation: USD ${Number(result.estimated_call_reservation).toFixed(8)}. This covers the initial prompt and output allowance; each run needs several calls.`;
+        error.textContent = result.launch_allowed ? "" : result.message;
+        launch.disabled = launching || !result.launch_allowed;
       }
     } catch (e) {
       if (version === previewVersion) {
@@ -106,15 +115,19 @@ if (form && form.dataset.enabled === "yes") {
   form.elements.case_set.addEventListener("change", selectSet);
   selectSet();
   form.addEventListener("change", update);
+  form.addEventListener("input", update);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = event.submitter;
+    if (button.disabled) return;
+    launching = true;
     button.disabled = true;
     try {
       const result = await post("/api/jobs", body());
       location.assign(result.url);
     } catch (e) {
       error.textContent = e.message;
+      launching = false;
       button.disabled = false;
     }
   });
@@ -126,7 +139,17 @@ if (output) {
   stream.onmessage = (event) => {
     const job = JSON.parse(event.data);
     document.getElementById("job-status").textContent = job.status;
-    output.textContent = job.output || "";
+    document.getElementById("job-outcome").textContent = job.outcome || "";
+    output.replaceChildren();
+    for (const line of (job.output || "").split("\n")) {
+      const run = (job.runs || []).find(r => r.report_path && line.includes(r.report_path));
+      if (run) {
+        const index = line.indexOf(run.report_path), link = document.createElement("a");
+        link.href = "/runs/" + encodeURIComponent(run.id) + "?tab=report";
+        link.textContent = "Open report · " + run.fault + " · " + run.system;
+        output.append(line.slice(0, index), link, line.slice(index + run.report_path.length), "\n");
+      } else output.append(line + "\n");
+    }
     document.getElementById("job-exit").textContent =
       job.exit_code === undefined
         ? job.error || ""
@@ -137,13 +160,14 @@ if (output) {
     for (const suite of job.suites || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/suites/" + encodeURIComponent(suite.id);
-      a.textContent = "Suite comparison · " + suite.name;
+      a.textContent = "Open comparison · " + suite.name;
+      a.className = "button primary";
       p.append(a); runs.append(p);
     }
     for (const run of job.runs || []) {
       const p = document.createElement("p"), a = document.createElement("a");
-      a.href = "/runs/" + encodeURIComponent(run.id);
-      a.textContent = [run.fault, run.system, run.case_set, run.status, run.verdict].join(" · ");
+      a.href = "/runs/" + encodeURIComponent(run.id) + "?tab=report";
+      a.textContent = ["Open report", run.fault, run.system, run.status, run.verdict].join(" · ");
       p.append(a);
       if (run.phoenix_url) {
         const trace = document.createElement("a");
@@ -155,7 +179,7 @@ if (output) {
     }
     if (!(job.runs || []).length) {
       const p = document.createElement("p");
-      p.textContent = job.status === "running" ? "Waiting for the first admitted run..." : "No new run artifacts. Grading jobs update the existing run.";
+      p.textContent = job.status === "running" ? "Waiting for the first admitted run. Progress and links appear here automatically." : "Open the comparison above for skipped attempts and reasons. Grading jobs update the existing run.";
       runs.append(p);
     }
   };

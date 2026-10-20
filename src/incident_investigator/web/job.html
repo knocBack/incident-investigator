@@ -2,10 +2,14 @@
 {% block content %}
     <span class="eyebrow">CLI job {{ job.id }}</span>
     <h1 id="job-status">{{ job.status }}</h1>
+    <p class="callout info" id="job-outcome" role="status">{{ job.outcome }}</p>
+    <div id="job-runs">
+        {% for suite in job.suites %}<p><a class="button primary" href="/suites/{{ suite.id }}">Open comparison</a></p>{% endfor %}
+        {% for run in job.runs %}<p><a class="button" href="/runs/{{ run.id }}?tab=report">Open report · {{ run.fault }} · {{ run.system }}</a></p>{% endfor %}
+    </div>
     <div class="command">{{ job.command }}</div>
     <div class="terminal" id="job-output" data-job="{{ job.id }}">{{ job.output }}</div>
     <p id="job-exit"></p>
-    <div id="job-runs"></div>
     <p><a class="button" href="/" target="_blank">View ongoing runs &amp; Phoenix traces ↗</a></p>
     <p class="page-note">Output streams from the real subprocess. Browser disconnects do not cancel it. Failed attempts remain available.</p>
 {% endblock %}

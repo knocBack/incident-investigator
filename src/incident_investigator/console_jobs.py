@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from incident_investigator.console_preflight import LaunchPreflight
 from incident_investigator.contracts import PROFILES
 from incident_investigator.graph_config import DEFAULT_GRAPH
 from incident_investigator.storage import FileEvalCatalog, Repositories
@@ -216,6 +217,7 @@ class Jobs:
         self.repo, self.root = repo, root or home()
         self.tasks: dict[str, asyncio.Task] = {}
         self._refreshed = float("-inf")
+        self.preflight = LaunchPreflight()
 
     def preview(self, request: RunRequest, ident: str):
         return build_command(request, self.repo, ident, root=self.root, validate_launch=False)
@@ -234,6 +236,7 @@ class Jobs:
                 "status": "running",
                 "command": display_command(argv),
                 "plan": job_plan(request, self.repo),
+                "provider": request.provider,
             },
         )
         self.tasks[ident] = asyncio.create_task(self.execute(ident, argv, output))
@@ -259,11 +262,75 @@ class Jobs:
                 except (ValueError, TypeError):
                     run["phoenix_url"] = None
             metadata["suites"] = [
-                s for s in self.repo.runs.suites() if s["batch"].get("launch_id") == ident
+                s
+                for s in self.repo.runs.suites()
+                if s["batch"].get("launch_id") == ident or s["name"] in {ident, f"eval-{ident}"}
             ]
+            for run in metadata["runs"]:
+                run["report_path"] = run["location"].rstrip("/") + "/report.md"
+            metadata["replay"] = metadata.get("provider") == "scripted" or (
+                bool(metadata["runs"]) and all(r["model"] == "scripted" for r in metadata["runs"])
+            )
             if metadata["status"] == "running" and ident not in self.tasks:
                 metadata["status"] = "interrupted"
+            self.outcome(metadata)
         return metadata
+
+    def outcome(self, metadata):
+        skipped, budget_stops, zero_spend = [], [], True
+        for suite in metadata["suites"]:
+            prefix = suite["prefix"]
+            board = self.repo.artifacts.json(prefix + "/leaderboard.json")
+            skipped.extend(board.get("skipped", suite["batch"].get("skipped", [])))
+            stop = self.repo.artifacts.json(prefix + "/budget-stop.json")
+            if stop and "budget" in stop.get("reason", "").lower():
+                budget_stops.append(stop)
+            ledger = self.repo.artifacts.json(prefix + "/budget.json")
+            after = self.repo.artifacts.json(prefix + "/spend-after.json")
+            zero_spend &= not ledger.get("calls") and after.get("usage_delta") in {"0", 0}
+        budget_stops.extend(
+            reason
+            for run in metadata["runs"]
+            if "budget"
+            in (
+                reason := (run.get("grade", {}).get("process", {}).get("stop_reason") or "").lower()
+            )
+            and "refus" in reason
+        )
+        finished = metadata["status"] in {"completed", "stopped"}
+        if skipped and not metadata["output"].strip():
+            metadata["output"] = "\n".join(
+                f"Skipped {s.get('fault', 'attempt')} | {s.get('system', 'unknown')}: {s['reason']}"
+                for s in skipped
+            )
+        if finished and ((skipped and not metadata["runs"]) or budget_stops):
+            metadata["status"] = "stopped"
+            if skipped and not metadata["runs"] and budget_stops:
+                cost = "USD 0 spent" if zero_spend else "spend reconciliation unavailable"
+                metadata["outcome"] = (
+                    f"Stopped: budget caps refused all {len(skipped)} attempts before sending; {cost}. Raise Suite cap USD or Per-run cap USD and launch again."
+                )
+            else:
+                reason = "Budget cap prevented further calls. " if budget_stops else ""
+                metadata["outcome"] = (
+                    f"Stopped: {reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the comparison for reasons and recorded usage."
+                )
+        elif metadata["status"] == "running":
+            metadata["outcome"] = (
+                "Watch progress below, then open the comparison or a run report as it appears."
+            )
+        elif metadata["runs"]:
+            metadata["outcome"] = (
+                f"{len(metadata['runs'])} run reports available. Open the comparison to compare results, or choose a report below."
+            )
+        else:
+            metadata["outcome"] = (
+                "No new reports retained. Open the comparison and job log for the outcome."
+            )
+        if metadata["replay"]:
+            metadata["outcome"] += (
+                " Canned pipeline replay for testing the console; inconclusive is expected."
+            )
 
     async def execute(self, ident: str, argv: list[str], output: Path):
         store = self.repo.artifacts
@@ -327,6 +394,10 @@ class Jobs:
             store.ingest_tree(output, output.relative_to(self.root).as_posix())
             self.repo.runs.refresh()
             self._refreshed = monotonic()
+            if metadata["status"] == "completed":
+                updated = self.get(ident)
+                metadata.update(status=updated["status"], outcome=updated["outcome"])
+                store.save_json(f"jobs/{ident}/job.json", metadata)
 
     async def close(self):
         for task in self.tasks.values():

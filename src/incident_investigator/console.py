@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import secrets
@@ -79,7 +80,12 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             return None
 
     templates.env.filters.update(pretty=pretty, phoenix_url=safe_phoenix_url)
-    templates.env.globals.update(dimensions=DIMENSIONS)
+    templates.env.globals.update(
+        dimensions=DIMENSIONS,
+        asset_version=hashlib.sha256(
+            (assets / "console.js").read_bytes() + (assets / "console.css").read_bytes()
+        ).hexdigest()[:12],
+    )
     app.mount("/static", StaticFiles(directory=str(assets)), name="static")
 
     @app.middleware("http")
@@ -318,7 +324,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         )
 
     @app.post("/api/preview")
-    def preview(body: RunRequest):
+    async def preview(body: RunRequest):
         if jobs is None:
             raise HTTPException(409, "Local process launcher unavailable for this storage backend")
         refresh()
@@ -326,7 +332,11 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             argv, _ = jobs.preview(body, "preview")
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"command": display_command(argv), "plan": job_plan(body, repo)}
+        return {
+            "command": display_command(argv),
+            "plan": job_plan(body, repo),
+            **await jobs.preflight.check(body, repo),
+        }
 
     @app.post("/api/jobs")
     async def launch(body: RunRequest):
@@ -335,6 +345,11 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         refresh()
         ident = uuid4().hex
         try:
+            # Check caps again server-side; a stale preview cannot authorize a refused launch.
+            jobs.preview(body, "preview")
+            preflight = await jobs.preflight.check(body, repo)
+            if not preflight["launch_allowed"]:
+                raise ValueError(preflight["message"])
             jobs.start(body, ident)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc

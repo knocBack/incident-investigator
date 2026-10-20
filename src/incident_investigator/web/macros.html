@@ -51,6 +51,7 @@
                         </td>
                         <td>
                             {{ r.model or 'unknown' }}<small>{{ r.system }} · {{ r.case_set }} · {{ r.graph }}</small>
+                            {% if r.model == 'scripted' %}<small>Canned console replay · inconclusive expected</small>{% endif %}
                         </td>
                         <td>
                             {{ badge(r.verdict) }}<small>{{ r.status }}</small>

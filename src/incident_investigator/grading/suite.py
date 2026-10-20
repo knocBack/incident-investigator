@@ -426,6 +426,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     except (KeyError, ValueError) as exc:
                         reason = str(exc)
                     if reason:
+                        print(
+                            f"Skipped {fault} | system {system} | repeat {repeat + 1}: {reason}",
+                            flush=True,
+                        )
                         batch["skipped"].append(
                             {
                                 "model": model_id,
@@ -439,6 +443,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 jobs.append((model_id, repeat, fault, system))
             save(out / "batch.json", batch)
             if not jobs and batch["skipped"]:
+                print(
+                    f"Stopped: all {len(batch['skipped'])} attempts skipped before sending. See the comparison for reasons.",
+                    flush=True,
+                )
                 save(out / "budget-stop.json", {**batch["skipped"][0], **guard.snapshot()})
             semaphore = asyncio.Semaphore(concurrency)
 
@@ -545,6 +553,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 for job, value in zip(jobs, settled, strict=True):
                     if not isinstance(value, dict):
                         model_id, repeat, fault, system = job
+                        print(
+                            f"Skipped {fault} | system {system} | repeat {repeat + 1}: suite cancelled before admission",
+                            flush=True,
+                        )
                         batch["skipped"].append(
                             {
                                 "model": model_id,
