@@ -203,6 +203,8 @@ async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
     )
     result = json.loads((directory / "result.json").read_text())
     assert result["status"] == "completed", result["stop_reason"]
+    if case == "reliability-02":
+        assert result["stop_category"] == "inconclusive"
     g = grade(result, expectation(case))
     assert g["verdict"] == "correct", g["diagnosis_checks"]
     assert g["citations"]["unknown"] == []
@@ -300,6 +302,11 @@ async def test_single_total_allowance_exceeds_specialist_allowance(tmp_path):
     assert result["status"] == "completed"
     assert result["usage"]["single"]["model_calls"] == 3
     assert result["usage"]["single"]["tool_calls"] == 8
+    replay = ScriptedModel()
+    assert await investigate(None, replay, resume=directory) == directory
+    assert replay.requests == []
+    resumed = json.loads((directory / "result.json").read_text())
+    assert resumed["graph"] == "single" and resumed["usage"] == result["usage"]
 
 
 async def test_three_run_concurrent_suite_fits_eleven_cent_budget(tmp_path):
@@ -482,11 +489,11 @@ async def test_cancelled_suite_retains_partial_reports_and_leaderboard(tmp_path)
         await task
     board = json.loads((args.out / "leaderboard.json").read_text())
     assert len(board["runs"]) == 2
-    assert all(g["process"]["execution_status"] == "failed" for g in board["runs"])
+    assert all(g["process"]["execution_status"] == "interrupted" for g in board["runs"])
     for result_path in args.out.glob("*/result.json"):
         result = json.loads(result_path.read_text())
         assert result["completeness"] == "partial"
-        assert "cancelled" in result["stop_reason"]
+        assert result["stop_reason"] == "interrupted"
         assert (result_path.parent / "report.md").exists()
         assert (result_path.parent / "grade.json").exists()
         # Previously committed paid work survives; unreceived calls stay unknown.

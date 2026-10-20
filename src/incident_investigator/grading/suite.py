@@ -139,7 +139,8 @@ def leaderboard(grades, out, skipped=(), k=4):
                 if measured_sum(walls) is not None
                 else None,
                 "execution_failures": sum(
-                    g["process"]["execution_status"] in {"failed", "resource_exhausted"}
+                    g["process"]["execution_status"]
+                    in {"failed", "resource_exhausted", "interrupted"}
                     for g in items
                 ),
                 "faults": _fault_metrics(items, k),
@@ -436,7 +437,12 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                         "system": system,
                     }
                     if (directory / "attempt-error.json").exists():
-                        g["process"]["execution_status"] = "failed"
+                        error = json.loads((directory / "attempt-error.json").read_text())
+                        g["process"]["execution_status"] = (
+                            "interrupted"
+                            if error["exception_type"] == "CancelledError"
+                            else "failed"
+                        )
                     save(directory / "grade.json", g)
                     print(f"{g['verdict']} | {directory / 'report.md'}", flush=True)
                     return g
