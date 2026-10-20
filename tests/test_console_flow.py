@@ -1086,3 +1086,25 @@ def test_grounding_hint_and_launch_button_status_are_visible(repo, tmp_path):
         form = client.get("/run").text
         assert 'id="launch-status" role="status"' in form
         assert 'aria-describedby="launch-status"' in form
+
+
+def test_tied_summary_skips_scripted_replays_and_compares_rounded_grounding():
+    from incident_investigator.console_views import comparison_outcome
+
+    def side(wall, grounding, scripted):
+        return {
+            "provisional": False,
+            "pass1": 1,
+            "correct": 1,
+            "n": 1,
+            "runs": [],
+            "grounding": grounding,
+            "scripted_no_charge": scripted,
+            "resources": {"wall_seconds": wall, "model_calls": 2},
+        }
+
+    scripted = comparison_outcome({"multi": side(3, 0.5, True), "single": side(1, 0.9, True)})
+    assert "Per retained attempt" not in scripted
+    live = comparison_outcome({"multi": side(2, 0.501, False), "single": side(1, 0.499, False)})
+    assert "Single used 50% less wall time" in live
+    assert "grounding" not in live

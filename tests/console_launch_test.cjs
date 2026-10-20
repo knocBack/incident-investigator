@@ -87,5 +87,20 @@ function setup() {
   c.reply(c.requests[1], {launch_allowed:false,message:"Raise Suite cap USD",blocked_fields:["budget_usd"]}); await flush();
   assert.match(c.nodes["launch-status"].textContent, /Raise Suite cap USD/);
   assert.equal(c.nodes["launch-job"].disabled, true);
+  // A refused launch must not strand the button: once the condition clears, Launch works again.
+  const d = setup(); d.reply(d.requests[0]); await flush();
+  const first = d.form.emit("submit"); await flush();
+  const attempt = d.requests.filter(r=>r.url === "/api/jobs");
+  assert.equal(attempt.length, 1);
+  d.reply(attempt[0], {detail:"a console job is already active"}, false); await first;
+  assert.equal(d.nodes["launch-job"].disabled, false, "refusal leaves Launch usable");
+  assert.match(d.nodes["launch-status"].textContent, /already active/);
+  const second = d.form.emit("submit"); await flush();
+  assert.equal(d.nodes["run-error"].textContent, "", "stale refusal clears on retry");
+  const retry = d.requests.filter(r=>r.url === "/api/jobs");
+  assert.equal(retry.length, 2);
+  d.reply(retry[1], {url:"/jobs/after-refusal"}); await second;
+  assert.deepEqual(d.destinations, ["/jobs/after-refusal"]);
+
   process.stdout.write("first-click launch, latest-settings check, authorization and retry passed\n");
 })().catch(error => { process.stderr.write(error.stack + "\n"); process.exitCode = 1; }).finally(() => clearTimeout(watchdog));

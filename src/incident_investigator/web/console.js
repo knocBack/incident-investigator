@@ -113,6 +113,7 @@ if (form && form.dataset.enabled === "yes") {
     launchStatus.textContent = launching ? launchPhase : pending
       ? "Updating command… Launch will wait for the current settings check."
       : launch.disabled ? error.textContent || "Resolve settings before launching."
+      : error.textContent ? error.textContent + " Launch again once that is resolved."
       : "Ready to launch the current settings.";
   }
   function update(force = false) {
@@ -178,6 +179,7 @@ if (form && form.dataset.enabled === "yes") {
     event.preventDefault();
     if (launching) return;
     launching = true;
+    if (!launch.disabled) error.textContent = ""; // Drop a stale refusal; blocking check messages stay.
     launchPhase = "Checking settings…";
     renderLaunch();
     try {
@@ -200,7 +202,6 @@ if (form && form.dataset.enabled === "yes") {
       error.textContent = e.message;
       if (e.message.includes("explicitly authorize OpenRouter")) blockedFields(["confirm_paid"]);
       launching = false;
-      checked = null;
       renderLaunch();
     }
   });

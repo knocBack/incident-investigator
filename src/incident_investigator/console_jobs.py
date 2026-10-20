@@ -336,6 +336,12 @@ class Jobs:
             and "refus" in reason
         )
         finished = metadata["status"] in {"completed", "stopped"}
+        target = (
+            "results"
+            if metadata["suites"]
+            and all(s["results_label"] == "Open results" for s in metadata["suites"])
+            else "comparison"
+        )
         if skipped and not metadata["output"].strip():
             metadata["output"] = "\n".join(
                 f"Skipped {s.get('fault', 'attempt')} | {s.get('system', 'unknown')}: {s['reason']}"
@@ -351,19 +357,19 @@ class Jobs:
             else:
                 reason = "Budget cap prevented further calls. " if budget_stops else ""
                 metadata["outcome"] = (
-                    f"Stopped: {reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the comparison for reasons and recorded usage."
+                    f"Stopped: {reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the {target} for reasons and recorded usage."
                 )
         elif metadata["status"] == "running":
             metadata["outcome"] = (
-                "Watch progress below, then open the comparison or a run report as it appears."
+                f"Watch progress below, then open the {target} or a run report as it appears."
             )
         elif metadata["runs"]:
             metadata["outcome"] = (
-                f"{len(metadata['runs'])} run reports available. Open the comparison to compare results, or choose a report below."
+                f"{len(metadata['runs'])} run reports available. Open the {target}, or choose a report below."
             )
         else:
             metadata["outcome"] = (
-                "No new reports retained. Open the comparison and job log for the outcome."
+                f"No new reports retained. Open the {target} and job log for the outcome."
             )
         if failures:
             metadata["outcome"] = (
