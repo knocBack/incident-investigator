@@ -12,13 +12,19 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from incident_investigator.console_jobs import Jobs, RunRequest, display_command, graph_variants
+from incident_investigator.console_jobs import (
+    Jobs,
+    RunRequest,
+    display_command,
+    graph_variants,
+    job_plan,
+)
 from incident_investigator.console_views import (
     markdown,
     observations,
@@ -26,6 +32,7 @@ from incident_investigator.console_views import (
     pretty,
     suite_metrics,
     summary,
+    system_metrics,
 )
 from incident_investigator.contracts import PROFILES
 from incident_investigator.storage import Repositories, repositories
@@ -217,6 +224,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             raise HTTPException(404, "Unknown suite")
         rows = repo.runs.runs({"suite": ident})
         metrics = suite_metrics(rows, k)
+        board = repo.artifacts.json(selected["prefix"] + "/leaderboard.json")
+        launch = repo.artifacts.json(f"jobs/{selected['batch'].get('launch_id')}/job.json")
+        provisional = (
+            not board
+            or launch.get("status") == "running"
+            or any(row["provisional"] for row in metrics)
+        )
+        for row in metrics:
+            row["provisional"] |= provisional
+        variants = {f["id"] for f in repo.catalog.faults() if f.get("case_set") == "variants"}
+        selected_cases = selected["batch"].get("faults", [r["fault"] for r in metrics])
         return render(
             request,
             "suite.html",
@@ -226,7 +244,20 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             k=k,
             metrics=metrics,
             paired=paired_metrics(metrics),
+            systems=system_metrics(board, rows, k),
+            provisional=provisional,
+            primary_count=len(set(selected_cases) - variants),
+            has_leaderboard=repo.artifacts.read(selected["prefix"] + "/leaderboard.md") is not None,
         )
+
+    @app.get("/suites/{ident}/leaderboard.md")
+    def suite_leaderboard(ident: str):
+        refresh()
+        selected = next((s for s in repo.runs.suites() if s["id"] == ident), None)
+        content = repo.artifacts.read(selected["prefix"] + "/leaderboard.md") if selected else None
+        if content is None:
+            raise HTTPException(404, "Leaderboard not retained")
+        return Response(content, media_type="text/plain")
 
     @app.get("/compare", response_class=HTMLResponse)
     def compare(request: Request, left: str = "", right: str = "", kind: str = "runs"):
@@ -295,7 +326,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             argv, _ = jobs.preview(body, "preview")
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"command": display_command(argv)}
+        return {"command": display_command(argv), "plan": job_plan(body, repo)}
 
     @app.post("/api/jobs")
     async def launch(body: RunRequest):

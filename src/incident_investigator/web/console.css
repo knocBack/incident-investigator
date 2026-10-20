@@ -302,6 +302,11 @@ select {
   overflow: auto;
   max-width: 100%;
 }
+.system-summary th,
+.system-summary td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 table {
   border-collapse: collapse;
   width: 100%;

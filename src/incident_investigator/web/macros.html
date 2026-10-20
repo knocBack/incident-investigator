@@ -87,6 +87,12 @@
 {% macro measured(v, known=none, digits=2) -%}
     {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}unknown{% if known is number %}<small>known {{ ('%.' ~ digits ~ 'f')|format(known) }}</small>{% endif %}{% endif %}
 {%- endmacro %}
+{% macro grounding(v, count, n) -%}
+    {% if v is number %}{{ '%.2f'|format(v) }}{% else %}unknown{% endif %} ({{ value(count) }}/{{ n }})
+{%- endmacro %}
+{% macro inline_measured(v, known=none, digits=2) -%}
+    {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}unknown{% if known is number %} (known {{ ('%.' ~ digits ~ 'f')|format(known) }}){% endif %}{% endif %}
+{%- endmacro %}
 {% macro resources(r) %}
     <div class="check-row"><span>Cost USD</span><span>{{ measured(r.cost, r.known_cost, 6) }}</span></div>
     <div class="check-row"><span>Input tokens</span><span>{{ measured(r.input_tokens, r.known_input_tokens, 0) }}</span></div>
@@ -98,6 +104,8 @@
     {% if row %}
         <p>{{ row.verdicts|pretty }}{% if row.provisional %}<small>Provisional: includes ungraded attempts</small>{% endif %}</p>
         <p>pass@1 {{ '%.3f'|format(row.pass1) }} · pass@k {{ '%.3f'|format(row.passk) }} · pass^k {{ '%.3f'|format(row.powerk) }} (k={{ row.k }})</p>
+        <div class="check-row"><span>Grounding</span><span>{{ grounding(row.grounding, row.grounding_measured, row.n) }}</span></div>
+        <div class="check-row"><span>Execution failures</span><span>{{ row.execution_failures }}</span></div>
         {{ resources(row.resources) }}
         {% for run in row.runs %}
             {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.status }}</a></p>{% endif %}

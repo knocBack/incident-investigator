@@ -137,6 +137,7 @@ def test_leaderboard_keeps_measured_grounding_when_an_attempt_has_no_hypotheses(
         assert (metric["grounding_measured"], metric["grounding_total"]) == (2, 3)
         assert metric["execution_failures"] == 1
     markdown = (tmp_path / "leaderboard.md").read_text()
+    assert "## Reliability outcomes" not in markdown
     assert markdown.count("0.5 (2/3)") == 4
     assert markdown.count("Execution failures") == 2
     assert "| multi | staged | primary | unknown | 3 | 1 |" in markdown

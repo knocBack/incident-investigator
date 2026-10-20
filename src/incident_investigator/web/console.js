@@ -83,11 +83,14 @@ if (form && form.dataset.enabled === "yes") {
       const result = await post("/api/preview", body());
       if (version === previewVersion) {
         preview.textContent = result.command;
+        document.getElementById("job-limit").textContent =
+          `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
         error.textContent = "";
       }
     } catch (e) {
       if (version === previewVersion) {
         preview.textContent = "Resolve settings to preview the command.";
+        document.getElementById("job-limit").textContent = "Job limit unavailable until settings are valid.";
         error.textContent = e.message;
       }
     }
@@ -134,7 +137,7 @@ if (output) {
     for (const suite of job.suites || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/suites/" + encodeURIComponent(suite.id);
-      a.textContent = "Suite leaderboard · " + suite.name;
+      a.textContent = "Suite comparison · " + suite.name;
       p.append(a); runs.append(p);
     }
     for (const run of job.runs || []) {

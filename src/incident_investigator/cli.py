@@ -222,6 +222,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+async def _graceful_evaluation(args):
+    """Let the suite's cancellation cleanup retain grades and final spend records."""
+    import signal
+
+    from incident_investigator.grading.suite import execute
+
+    loop, task = asyncio.get_running_loop(), asyncio.current_task()
+
+    def terminate():
+        if not task.cancelling():
+            task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, terminate)
+    try:
+        await execute(args)
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -249,9 +268,7 @@ def main() -> None:
         uvicorn.run(create_console(), host="127.0.0.1", port=args.port)
         return
     if args.command in {"eval", "eval-suite"}:
-        from incident_investigator.grading.suite import execute
-
-        asyncio.run(execute(args))
+        asyncio.run(_graceful_evaluation(args))
         return
     if args.command == "inspect":
         result = json.loads((args.run_dir / "result.json").read_text())

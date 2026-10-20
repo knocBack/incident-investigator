@@ -10,9 +10,19 @@
         <label>k<input type="number" min="1" max="100" name="k" value="{{ k }}"></label>
         <button class="button">Update</button>
         <a class="button" href="/suites/{{ suite.id }}?k={{ k }}">Refresh results</a>
+        {% if has_leaderboard %}<a class="button" href="/suites/{{ suite.id }}/leaderboard.md">Open leaderboard.md</a>{% endif %}
     </form>
+    <h2>System summary</h2>
+    {% if provisional %}<p class="callout info">Provisional: the suite is incomplete or still running. These are retained observations so far.</p>{% endif %}
+    <p class="caption">Grounding averages measured attempts (measured/total). pass@k and pass^k are means across incidents, with k capped per incident. Primary and reliability sets remain separate.</p>
+    <div class="card flush"><div class="table-wrap"><table class="system-summary">
+        <thead><tr><th>System / set / model</th><th>Runs</th><th>Execution failures</th><th>Diagnostic rate / pass@1</th><th>Mean pass@k / pass^k</th><th>Grounding</th><th>Mean model / tool calls</th><th>Mean USD</th><th>Mean wall s</th></tr></thead>
+        <tbody>{% for row in systems %}
+            <tr><td>{{ row.system }}<small>{{ row.suite_kind }} · {{ row.models.values()|unique|join(', ') }}</small></td><td>{{ row.runs }}</td><td>{{ m.value(row.execution_failures) }}</td><td>{{ m.measured(row.accuracy, digits=3) }}</td><td>{{ m.measured(row.passk, digits=3) }} / {{ m.measured(row.powerk, digits=3) }}</td><td>{{ m.grounding(row.mean_grounding, row.grounding_measured, row.grounding_total|default(row.runs)) }}</td><td>{{ m.measured(row.mean_model_calls) }} / {{ m.measured(row.mean_tool_calls) }}</td><td>{{ m.inline_measured(row.mean_cost, row.mean_known_cost, 6) }}</td><td>{{ m.measured(row.mean_wall_seconds) }}</td></tr>
+        {% else %}<tr><td colspan="9">No observed attempts yet.</td></tr>{% endfor %}</tbody>
+    </table></div></div>
     <h2>Primary accuracy</h2>
-    <p class="caption">Ten incident cases. Reliability variants are excluded from primary accuracy.</p>
+    <p class="caption">{{ primary_count }} selected primary incident cases. Reliability variants are excluded from primary accuracy.</p>
     <div class="card flush"><div class="table-wrap"><table>
         <thead><tr><th>Incident / system / model</th><th>Verdicts</th><th>Correct / n</th><th>pass@1</th><th>pass@k / pass^k</th><th>Effective k</th></tr></thead>
         <tbody>{% for row in metrics if row.case_set == 'primary' %}
@@ -25,7 +35,7 @@
         <thead><tr><th>Variant / system</th><th>Diagnostic verdicts</th><th>R1 exercised / recovered</th><th>R1 not exercised</th><th>R1 recovered + correct</th><th>R2 justified</th></tr></thead>
         <tbody>{% for row in metrics if row.case_set == 'variants' %}
             {% set r = row.reliability %}
-            <tr><td>{{ row.fault }}<small>{{ row.system }} · {{ row.model }}</small></td><td>{{ row.verdicts|pretty }}</td><td>{{ r.recovery.fault_exercised }} / {{ r.recovery.recovered }}</td><td>{{ r.recovery.not_exercised }}</td><td>{{ r.recovery.success }} / {{ r.recovery.runs }}</td><td>{{ r.uncertainty.justified }} / {{ r.uncertainty.runs }}</td></tr>
+            <tr><td>{{ row.fault }}<small>{{ row.system }} · {{ row.model }}</small></td><td>{{ row.verdicts|pretty }}{% if row.provisional %}<small>Provisional</small>{% endif %}</td><td>{% if r.recovery.runs %}{{ r.recovery.fault_exercised }} / {{ r.recovery.recovered }}{% else %}-{% endif %}</td><td>{% if r.recovery.runs %}{{ r.recovery.not_exercised }}{% else %}-{% endif %}</td><td>{% if r.recovery.runs %}{{ r.recovery.success }} / {{ r.recovery.runs }}{% else %}-{% endif %}</td><td>{% if r.uncertainty.runs %}{{ r.uncertainty.justified }} / {{ r.uncertainty.runs }}{% else %}-{% endif %}</td></tr>
         {% else %}<tr><td colspan="6">No reliability attempts in this suite.</td></tr>{% endfor %}</tbody>
     </table></div></div>
     <h2>Multi vs single, per incident</h2>

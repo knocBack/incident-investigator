@@ -237,17 +237,18 @@ def leaderboard(grades, out, skipped=(), k=4):
             lines.append(
                 f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['execution_failures']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} ({metric['grounding_measured']}/{metric['grounding_total']}) | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {usage_display(resource['input_tokens'], resource['known_input_tokens'])}/{usage_display(resource['output_tokens'], resource['known_output_tokens'])} | {usage_display(resource['cost'], resource['known_cost'])} | {display(metric['wall_seconds'])} |"
             )
-    lines.extend(
-        [
-            "",
-            "## Reliability outcomes",
-            "",
-            "Recovery requires an exercised failed retrieval and a bounded successful successor. A correct diagnosis without exercise is not demonstrated recovery.",
-            "",
-            "| System | Incident | R1 exercised / recovered / not exercised | R1 recovery plus diagnosis | R2 justified uncertainty |",
-            "| --- | --- | --- | --- | --- |",
-        ]
-    )
+    if any(r["reliability"][kind]["runs"] for r in rows for kind in ("recovery", "uncertainty")):
+        lines.extend(
+            [
+                "",
+                "## Reliability outcomes",
+                "",
+                "Recovery requires an exercised failed retrieval and a bounded successful successor. A correct diagnosis without exercise is not demonstrated recovery.",
+                "",
+                "| System | Incident | R1 exercised / recovered / not exercised | R1 recovery plus diagnosis | R2 justified uncertainty |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
     for row in rows:
         for incident, metric in row["faults"].items():
             recovery, uncertainty = (

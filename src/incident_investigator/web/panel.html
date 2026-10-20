@@ -119,12 +119,13 @@
                 <div class="card">
                     <p class="step-label">03 / Review & launch</p>
                     <div class="command" id="command-preview">Choose settings to preview the command.</div>
+                    <p class="caption" id="job-limit" role="status">Update the command to calculate the job limit.</p>
                     <p class="error-text" id="run-error" role="status"></p>
                     <div class="actions">
                         <button class="button" type="button" id="preview-command">Update command</button>
                         <button class="button primary" {% if not enabled %}disabled{% endif %}>Launch</button>
                     </div>
-                    <p class="caption">One active console job at a time. Selected concurrency applies to its batch. Jobs retain logs and have a one-hour console timeout; individual runs retain finite runtime limits.</p>
+                    <p class="caption">One active console job at a time. The job limit uses selected attempts, concurrency and per-run wall limits plus a margin. Timeout or cancellation allows graceful finalization before a forced stop.</p>
                 </div>
             </div>
         </div>

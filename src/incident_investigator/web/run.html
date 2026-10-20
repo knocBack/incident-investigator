@@ -41,7 +41,7 @@
             {% for h in result.get('hypotheses',[]) %}
                 <p>{{ h.statement }}</p>
             {% endfor %}
-            {% for check,passed in grade.get('diagnosis_checks',{}).items() %}
+            {% for check,passed in grade.get('diagnosis_checks',{}).items() if check != 'justified_uncertainty' or (grade.get('reliability') or {}).get('kind') == 'uncertainty' %}
                 <div class="check-row">
                     <span>{{ check }}</span>{{ m.badge('pass' if passed else 'fail') }}
                 </div>

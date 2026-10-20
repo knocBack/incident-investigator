@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import shlex
 import sys
+from contextlib import suppress
 from pathlib import Path
 from time import monotonic
 from typing import Literal
@@ -179,6 +181,34 @@ def display_command(argv: list[str]) -> str:
     return shlex.join(["incident-investigator", *argv[4:]])
 
 
+TERMINATION_GRACE_SECONDS = 120
+
+
+def job_plan(request: RunRequest, repo: Repositories) -> dict:
+    cases = request.faults or [
+        f["id"]
+        for f in repo.catalog.faults()
+        if f["injectable"]
+        and f["evaluable"]
+        and (request.case_set == "all" or f.get("case_set", "primary") == request.case_set)
+    ]
+    attempts = (
+        len(cases) * request.repeats * (2 if request.system == "both" else 1)
+        if request.command == "eval-suite"
+        else 1
+    )
+    concurrency = min(request.concurrency, attempts) if request.command == "eval-suite" else 1
+    wall = request.wall_seconds or PROFILES[request.limits_profile].wall_seconds
+    duration = math.ceil(attempts / max(concurrency, 1)) * wall
+    return {
+        "attempts": attempts,
+        "concurrency": concurrency,
+        "wall_seconds": wall,
+        "timeout_seconds": math.ceil(duration + max(60, duration * 0.1)),
+        "termination_grace_seconds": TERMINATION_GRACE_SECONDS,
+    }
+
+
 class Jobs:
     """Local process adapter. UI only sees persisted job records and artifact keys."""
 
@@ -203,6 +233,7 @@ class Jobs:
                 "id": ident,
                 "status": "running",
                 "command": display_command(argv),
+                "plan": job_plan(request, self.repo),
             },
         )
         self.tasks[ident] = asyncio.create_task(self.execute(ident, argv, output))
@@ -238,7 +269,15 @@ class Jobs:
         store = self.repo.artifacts
         metadata = store.json(f"jobs/{ident}/job.json")
         process = None
+        reader = None
         captured = bytearray()
+
+        async def capture():
+            while chunk := await process.stdout.read(8192):
+                if len(captured) < 2_000_000:
+                    captured.extend(chunk[: 2_000_000 - len(captured)])
+                    store.write(f"jobs/{ident}/output.log", captured)
+
         try:
             env = {
                 **os.environ,
@@ -252,11 +291,9 @@ class Jobs:
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
             )
-            async with asyncio.timeout(3600):
-                while chunk := await process.stdout.read(8192):
-                    if len(captured) < 2_000_000:
-                        captured.extend(chunk[: 2_000_000 - len(captured)])
-                        store.write(f"jobs/{ident}/output.log", captured)
+            reader = asyncio.create_task(capture())
+            async with asyncio.timeout(metadata["plan"]["timeout_seconds"]):
+                await asyncio.shield(reader)
                 metadata["exit_code"] = await process.wait()
             metadata["status"] = "completed" if metadata["exit_code"] == 0 else "failed"
         except asyncio.CancelledError:
@@ -267,8 +304,25 @@ class Jobs:
             metadata["error"] = type(exc).__name__
         finally:
             if process and process.returncode is None:
-                process.kill()
-                await process.wait()
+                with suppress(ProcessLookupError):
+                    process.terminate()
+                metadata["termination"] = "SIGTERM"
+                try:
+                    async with asyncio.timeout(metadata["plan"]["termination_grace_seconds"]):
+                        await process.wait()
+                        if reader:
+                            await asyncio.shield(reader)
+                except TimeoutError:
+                    if process.returncode is None:
+                        process.kill()
+                        metadata["termination"] = "SIGKILL"
+                        await process.wait()
+            if reader:
+                if not reader.done():
+                    reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+            if process:
+                metadata["exit_code"] = process.returncode
             store.save_json(f"jobs/{ident}/job.json", metadata)
             store.ingest_tree(output, output.relative_to(self.root).as_posix())
             self.repo.runs.refresh()
