@@ -22,14 +22,14 @@ uv run incident-investigator eval var/runs/<run-id>
 
 `inspect` prints saved exports. `eval` makes no model calls and writes a separate grading suite under `var/suites/`. The demo saves an evaluator expectation pointer so no fault argument is needed. Replace angle-bracket values before running template commands.
 
-## 3. Run all five faults without a key
+## 3. Run the primary set without a key
 
 ```sh
 uv run incident-investigator eval-suite --model scripted --models scripted \
   --script tests/scripted-demo.json --quick --budget-usd 0
 ```
 
-This creates a fresh suite with one attempt per fault, concurrency five and JSON/Markdown leaderboards. The replay reports inconclusive for all five; a successful command is not a correct diagnostic grade. Each new attempt starts with its own lab and replay state.
+This creates a fresh suite with one attempt for each of the ten primary incidents, concurrency five and JSON/Markdown leaderboards. The replay reports inconclusive for all ten; a successful command is not a correct diagnostic grade. Each new attempt starts with its own lab and replay state.
 
 ## 4. Open the console
 

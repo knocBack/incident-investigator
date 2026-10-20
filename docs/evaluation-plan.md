@@ -1,6 +1,6 @@
 # Incident and evaluation specification
 
-Status: accepted protocol for the ten primary incidents and two reliability variants. The current implementation has a separate five-family fault lab, grader and evaluation console. The paired fixtures and single-agent baseline are a separate change; the matched benchmark and comparison report are still pending. See [evaluation status](evaluation.md).
+Status: accepted protocol for the ten primary incidents and two reliability variants. The current implementation has the five-family fault lab, the paired case fixtures, both reliability variants, the single-agent baseline, the grader and the evaluation console. One exploratory multi-versus-single run exists; the full matched benchmark is still pending. See [evaluation status](evaluation.md).
 
 Audience: dataset authors and human evaluators. This document includes expected answers. Never provide it, design documents or evaluator labels to runtime agents or their retrieval tools. File naming alone does not enforce this boundary; implementation must enforce it.
 
@@ -212,7 +212,7 @@ All deterministic reliability checks must pass. Use controlled local doubles and
 
 Demonstrate structured role exchange, critic-requested targeted evidence gathering, and hypothesis revision using controlled runtime tests and inspect recorded real-model runs. The two reliability variants retain their case-specific requirements, including recovery and justified uncertainty. Engineering checks alone do not establish model diagnosis quality. These tests are not additional application services or incident families.
 
-The runtime regression suite now covers parallel completion, bounded recovery, invocation locking, incompatible versions and unknown-call accounting. See [runtime contracts](lld.md) and `tests/test_reliability.py`. This protocol also defines broader benchmark acceptance; a passing development test is not evidence that the pending paired benchmark passed.
+The runtime regression suite now covers parallel completion, bounded recovery, invocation locking, incompatible versions and unknown-call accounting. See [runtime contracts](lld.md) and `tests/test_reliability.py`. This protocol also defines broader benchmark acceptance; a passing development test is not evidence that the paired benchmark passed.
 
 ## Checkpoint validation process
 

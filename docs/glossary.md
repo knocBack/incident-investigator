@@ -35,7 +35,12 @@
 | pass@k | Estimated chance of at least one correct result in k sampled attempts |
 | pass^k | Estimated chance all k sampled attempts are correct |
 | Model parity | Holding the model and settings fixed across compared systems |
-| Single-agent baseline | A planned iterative investigator with the same tools and total limits as the team |
+| Single-agent baseline | One investigator conversation with the same tools, snapshot, model and limits as the team |
+| Grounding | Fraction of ranked hypotheses whose valid supporting references include a retrieved observation |
+| Execution failure | A run that stopped without completing reporting; not a wrong diagnosis |
+| Model-call error | A failed model request, counted even when the run later completes |
+| Budget-censored | An attempt ended because the suite budget guard refused a further call |
+| R1 / R2 | Reliability variants: recovery from a transient retrieval failure, and justified uncertainty |
 | Budget reserve | Capacity held before dispatch, distinct from measured usage |
 | Known subtotal | Available measurements summed without pretending missing measurements are zero |
 | OpenRouter | The optional provider API used by the model adapter |
