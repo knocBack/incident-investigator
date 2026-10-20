@@ -40,7 +40,8 @@
 | Known subtotal | Available measurements summed without pretending missing measurements are zero |
 | OpenRouter | The optional provider API used by the model adapter |
 | Scripted replay | Explicit canned actions for deterministic execution tests |
-| Phoenix | An optional local viewer for agent/model/tool traces |
+| Trace | Local event records of a run, including calls, validation and state transitions, saved in `trace.jsonl` |
+| Phoenix | An external local viewer for agent, model and tool spans; the Phoenix stack is optional |
 | Artifact store | Interface for reading, writing and listing opaque artifact keys |
 | Run repository | Interface for indexing and selecting saved runs and suites |
 | Evaluator catalog | Separate interface for discovering faults and expected answers |

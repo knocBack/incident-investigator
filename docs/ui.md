@@ -1,6 +1,6 @@
 # Evaluation console guide
 
-The console launches local CLI jobs and connects their outputs: reports, frozen evidence, automatic grades, human review and suite metrics. Phoenix is an optional separate viewer for model and tool traces. No frontend build or account is required.
+The console launches local CLI jobs and connects their outputs: reports, frozen evidence, automatic grades, human review and suite metrics. Every run writes its own trace. The Phoenix stack is optional: a separate viewer for model and tool spans. No frontend build or account is required.
 
 The steps and five screenshots below were verified in a browser against a fresh workspace on 2026-10-20, using scripted runs without a provider key. They show behavior, not diagnostic accuracy. The primary suite used bad configuration and database contention, two repeats each, concurrency two and a zero budget. A separate scripted run verified Phoenix export and its trace link.
 
@@ -44,7 +44,7 @@ uv run --extra phoenix incident-investigator demo --model scripted \
   --script tests/scripted-demo.json --trace phoenix
 ```
 
-Use `uv run --extra phoenix` while tracing; a normal dependency sync can remove optional packages. `II_PHOENIX=1` also enables tracing for an invocation and its children. Only unauthenticated loopback HTTP endpoints are accepted. Tracing does not enable provider calls: scripted runs still use canned actions.
+Use `uv run --extra phoenix` while exporting to Phoenix; a normal dependency sync can remove optional packages. `II_PHOENIX=1` also enables Phoenix export for an invocation and its children. Only unauthenticated loopback HTTP endpoints are accepted. Phoenix export does not enable provider calls: scripted runs still use canned actions.
 
 ## Run evaluation
 
@@ -79,15 +79,15 @@ Execution status and diagnostic verdict are separate. A **completed / inconclusi
 
 ![Report from one scripted bad-configuration attempt](assets/ui-report.png)
 
-Open a fault name to see its run detail. The header shows the model, recorded workflow, case, status, verdict, artifact location, cost, call count, trace-event count and wall time. Tabs select **Report**, **Grade**, **Rubric** and **Frozen evidence**.
+Open a fault name to see its run detail.
 
-Report contains the summary, ranked hypotheses, supporting and contradicting evidence, facts, assumptions, recommendations, unresolved objections, gaps and per-role resources. Citation IDs open retrieved observations or tool receipts. A receipt describes what retrieval returned; it cannot establish an application cause by itself. Expand **Raw result.json** for the retained structured state. The stock replay deliberately supplies no diagnosis or factual report claims, so several sections are empty.
+Citation IDs open retrieved observations or tool receipts. A receipt describes what retrieval returned; it cannot establish an application cause by itself. Expand **Raw result.json** for the retained structured state. The stock replay deliberately supplies no diagnosis or factual report claims, so several sections are empty.
 
 ## Frozen evidence
 
 ![Frozen input and retrieved observation links](assets/ui-evidence.png)
 
-This tab shows the complete retained input, including records the agent never retrieved. It includes the dataset digest and expandable manifest. Filter by source, service and start/end timestamps with explicit UTC offsets. For example, select **checkout**, choose **Filter**, then expand an **Open source observation** row. A linked evidence ID opens the retrieved record; a plain source record ID identifies an input the run did not retrieve.
+This tab shows the complete retained input, including records the agent never retrieved. Filter by source, service and start/end timestamps with explicit UTC offsets. For example, select **checkout**, choose **Filter**, then expand an **Open source observation** row. A linked evidence ID opens the retrieved record; a plain source record ID identifies an input the run did not retrieve.
 
 The table displays up to 1,000 matching records. The matching count can exceed the visible rows. Older imported runs without full snapshots explicitly show retrieved evidence only; that view does not reconstruct missing input.
 
@@ -95,7 +95,7 @@ The table displays up to 1,000 matching records. The matching count can exceed t
 
 ![Automatic checks beside evaluator-only expectations](assets/ui-grade.png)
 
-Grade shows the deterministic verdict, culprit/mechanism/key-evidence checks, retrieved key evidence and expected answer. Expand **Full grade checks and usage** for grounding, citations, process checks and resource totals. The expected answer is evaluator-only and never enters investigator prompts, source snapshots or model spans.
+Expand **Full grade checks and usage** for grounding, citations, process checks and resource totals. The expected answer is evaluator-only and never enters investigator prompts, source snapshots or model spans.
 
 To grade or regrade a saved run, choose **Grade this run**. The launch panel selects `eval` and the saved run. Leave faults unchecked to use its expectation pointer, or select exactly one known fault to override that pointer. Review the command and launch. This invokes the real offline grader and writes a separate grading suite; it does not make model calls or modify the original run. Return to the run's Grade tab after completion.
 

@@ -58,7 +58,7 @@ var/index.json          rebuildable index
 | `source/` | Registered input retained for compatible recovery |
 | `snapshot/` | Frozen review input with manifest, alert, observations and fault plan |
 | `expectation.json` | Demo evaluator pointer, outside the runtime source |
-| `phoenix.json` | Optional trace/session link |
+| `phoenix.json` | Phoenix trace/session link, when exported |
 
 ```sh
 uv run incident-investigator inspect var/runs/<run-id>
@@ -121,7 +121,7 @@ uv run incident-investigator console
 
 The console binds to `127.0.0.1:8765`. `--port` selects another port. `incident-investigator import` takes one or more existing artifact roots and indexes them in place without editing the originals. Keep grades and reviews in the chosen workspace. `II_EVALS` selects an evaluator catalog containing `faults/*.json`; it never changes investigator sources.
 
-`II_STORAGE=memory` selects the memory viewer/review backend, with subprocess launch unavailable by default. Filesystem storage is the normal persistent backend. Phoenix is optional; [the console guide](ui.md#start-with-phoenix) includes the verified setup and trace behavior.
+`II_STORAGE=memory` selects the memory viewer/review backend, with subprocess launch unavailable by default. Filesystem storage is the normal persistent backend. The Phoenix stack is optional; [the console guide](ui.md#start-with-phoenix) includes the verified setup and trace behavior.
 
 ## Development checks
 

@@ -11,7 +11,7 @@ flowchart LR
     T <--> G[Staged investigation]
     G <--> M[Model adapter]
     G --> A[Local run artifacts]
-    G -. optional traces .-> P[Local Phoenix]
+    G -. trace export .-> P[Phoenix stack, optional]
     A --> C[Evaluation console]
     A --> E[Offline grader]
     K[Evaluator expectations] --> E
@@ -56,7 +56,7 @@ The default workspace is `var/`, overridden by `II_HOME`. Runs retain human and 
 
 The FastAPI console renders HTML with small JavaScript files. It receives storage repositories through dependency injection. `ArtifactStore` manages opaque keys; `RunRepository` indexes runs and suites; `EvalCatalog` supplies evaluator expectations. Filesystem adapters are the default, and memory adapters support isolated viewing/review tests. An object-store adapter and production telemetry integrations remain future work.
 
-Phoenix export is optional and restricted to loopback HTTP. It shows model/tool inputs, outputs, timing and available usage. The console adds the frozen evidence, expected-answer grade and human rubric. Neither source of traces replaces local recovery artifacts. See the [console guide](ui.md).
+Every run writes its local trace to `trace.jsonl`. Export to the Phoenix stack is optional and restricted to loopback HTTP. Phoenix shows model/tool inputs, outputs, timing and available usage. The console adds the frozen evidence, expected-answer grade and human rubric. Neither source of traces replaces local recovery artifacts. See the [console guide](ui.md).
 
 ## Implementation map
 
@@ -67,7 +67,7 @@ Phoenix export is optional and restricted to loopback HTTP. It shows model/tool 
 | `staged.py` | Stage subgraphs and conditional routes |
 | `runtime.py`, `contracts.py`, `repair.py` | Admission, execution, validation and role exchange |
 | `reliability.py`, `reporting.py` | Invocation ownership, compatibility and exports |
-| `models/`, `telemetry/` | Model boundary and optional tracing |
+| `models/`, `telemetry/` | Model boundary and tracing |
 | `grading/` | Offline verdicts, suites and budget guard |
 | `storage.py`, `workspace.py` | Artifact access, indexing and workspace paths |
 | `console.py`, `console_jobs.py`, `console_views.py`, `web/` | Local launch and review interface |

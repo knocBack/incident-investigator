@@ -9,7 +9,7 @@
 ![LangGraph](https://img.shields.io/badge/built%20with-LangGraph-1c3c3c)
 ![Status](https://img.shields.io/badge/status-MVP-yellow)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Status](#status-and-results) · [Docs](#documentation)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Console](#console) · [Status](#status-and-results) · [Docs](#documentation)
 
 </div>
 
@@ -69,6 +69,21 @@ flowchart LR
 | Finite and resumable | Every run has call, time and review limits, and can resume from its SQLite checkpoint |
 
 Evidence comes from the fault lab today. Sources sit behind a typed registry, so real monitoring such as Prometheus or OpenTelemetry can be plugged in later. No such integration ships yet.
+
+## Console
+
+Browse runs, read reports and check each citation against the frozen evidence. See the [console guide](docs/ui.md).
+
+<p align="center">
+  <img src="docs/assets/ui-runs.png" width="49%" alt="Runs and suites list">
+  <img src="docs/assets/ui-evidence.png" width="49%" alt="Frozen evidence with clickable IDs">
+</p>
+<p align="center"><em>Left: all runs and suites. Right: a run's frozen evidence, with clickable IDs.</em></p>
+
+<p align="center">
+  <img src="docs/assets/ui-grade.png" width="70%" alt="Automatic grade beside the expected answer">
+</p>
+<p align="center"><em>Automatic grade checks beside the expected answer.</em></p>
 
 ## Status and results
 

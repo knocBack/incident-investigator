@@ -42,6 +42,6 @@ Expectations, human notes and grading logic remain outside prompts and tool-visi
 
 Use source functions behind a typed registry and artifact/run/catalog repositories behind the console. Local JSONL and filesystem adapters serve the MVP. New telemetry and object-storage adapters can implement those boundaries later; they are not shipped integrations.
 
-## A local console with optional traces
+## A local console with an optional Phoenix stack
 
-Use server-rendered pages and small JavaScript files, without a frontend build or account. Launch one bounded subprocess job at a time, with explicit confirmation for provider calls. Phoenix export is opt-in and loopback-only. Local artifacts remain useful when tracing is disabled or unavailable.
+Use server-rendered pages and small JavaScript files, without a frontend build or account. Launch one bounded subprocess job at a time, with explicit confirmation for provider calls. Every run writes its local trace. Export to the Phoenix stack is opt-in and loopback-only. Local artifacts, including the trace, stay complete when the Phoenix stack is off or unavailable.

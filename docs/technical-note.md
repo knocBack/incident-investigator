@@ -18,7 +18,7 @@ Every external call is separated from admission and acceptance by durable checkp
 
 Run/task call limits, timeouts, bounded retries and review caps guarantee finite execution. Hard exhaustion retains partial exports. A kernel lock prevents concurrent modifiers of one run, and a local runner semaphore bounds aggregate active calls.
 
-The console connects reports to frozen evidence, automatic grades, human rubric notes and suite comparisons. Optional local Phoenix export shows model/tool behavior. Local artifacts remain authoritative even without tracing. Unknown cost and tokens remain unknown rather than becoming reassuring zeros.
+The console connects reports to frozen evidence, automatic grades, human rubric notes and suite comparisons. Every run writes a local trace; an optional Phoenix stack displays model and tool spans. Local artifacts remain authoritative without the Phoenix stack. Unknown cost and tokens remain unknown rather than becoming reassuring zeros.
 
 ## Evaluation and remaining work
 
