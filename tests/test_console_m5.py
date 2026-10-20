@@ -166,7 +166,9 @@ def test_console_separates_primary_reliability_and_unknown_resources(repo):
         assert "single · variants · staged" in client.get("/").text
 
 
-def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path):
+def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path, monkeypatch):
+    from incident_investigator import console_jobs
+
     repo = repositories(root=tmp_path)
     repo.artifacts.save_json("jobs/live/job.json", {"id": "live", "status": "running"})
     repo.artifacts.save_json("suites/live/batch.json", {"launch_id": "live", "suite_set": "all"})
@@ -187,6 +189,16 @@ def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path):
         "suites/live/r/phoenix.json", {"url": "http://127.0.0.1:6006/projects/p/traces/t"}
     )
     jobs = Jobs(repo, tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(console_jobs, "monotonic", lambda: clock[0])
+    refreshes = []
+    refresh = repo.runs.refresh
+
+    def counted_refresh():
+        refreshes.append(clock[0])
+        refresh()
+
+    monkeypatch.setattr(repo.runs, "refresh", counted_refresh)
     jobs.tasks["live"] = None  # Presence represents the independently running child.
     record = jobs.get("live")
     assert record["status"] == "running" and len(record["suites"]) == 1
@@ -194,10 +206,14 @@ def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path):
     assert run["system"] == "single" and run["fault"] == "case-02"
     assert run["phoenix_url"].endswith("/traces/t")
     assert repo.artifacts.read(run["prefix"] + "/result.json") is None
+    jobs.get("live")
+    assert refreshes == [0.0]
     repo.artifacts.save_json(
         "suites/live/r/phoenix.json", {"url": "https://external.invalid/traces/t"}
     )
+    clock[0] = 2.0
     assert jobs.get("live")["runs"][0]["phoenix_url"] is None
+    assert refreshes == [0.0, 2.0]
 
 
 def test_interrupted_export_counts_as_execution_failure(repo):

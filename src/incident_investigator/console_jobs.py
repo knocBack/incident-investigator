@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from time import monotonic
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -184,6 +185,7 @@ class Jobs:
     def __init__(self, repo: Repositories, root: Path | None = None):
         self.repo, self.root = repo, root or home()
         self.tasks: dict[str, asyncio.Task] = {}
+        self._refreshed = float("-inf")
 
     def preview(self, request: RunRequest, ident: str):
         return build_command(request, self.repo, ident, root=self.root, validate_launch=False)
@@ -208,7 +210,10 @@ class Jobs:
     def get(self, ident):
         metadata = self.repo.artifacts.json(f"jobs/{ident}/job.json")
         if metadata:
-            self.repo.runs.refresh()
+            now = monotonic()
+            if now - self._refreshed >= 2:
+                self.repo.runs.refresh()
+                self._refreshed = now
             metadata["output"] = (
                 self.repo.artifacts.read(f"jobs/{ident}/output.log") or b""
             ).decode(errors="replace")
@@ -267,6 +272,7 @@ class Jobs:
             store.save_json(f"jobs/{ident}/job.json", metadata)
             store.ingest_tree(output, output.relative_to(self.root).as_posix())
             self.repo.runs.refresh()
+            self._refreshed = monotonic()
 
     async def close(self):
         for task in self.tasks.values():
