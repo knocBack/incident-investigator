@@ -1,6 +1,6 @@
 # Architecture
 
-The system turns an alert and a frozen evidence snapshot into a report a human can inspect. A snapshot is a read-only set of records available before a fixed cutoff. A graph is the executable workflow that coordinates the investigation.
+The system turns an alert and a frozen evidence snapshot into a report a human can inspect. The [glossary](glossary.md) defines snapshot, graph and other recurring terms.
 
 ## System boundaries
 
@@ -71,3 +71,17 @@ Phoenix export is optional and restricted to loopback HTTP. It shows model/tool 
 | `grading/` | Offline verdicts, suites and budget guard |
 | `storage.py`, `workspace.py` | Artifact access, indexing and workspace paths |
 | `console.py`, `console_jobs.py`, `console_views.py`, `web/` | Local launch and review interface |
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/incident_investigator/` | CLI, staged runtime, model adapters, storage and console |
+| `src/incident_investigator/lab/` | Fault lab, load client and snapshot export |
+| `src/incident_investigator/tools/` | Typed frozen-evidence retrieval and controlled failures |
+| `fixtures/dev-00/` | Agent-visible development snapshot |
+| `evals/expected/` | Evaluator-only expectations; never investigator inputs |
+| `evals/results/` | Retained public evaluation summaries |
+| `tests/` | Scripted and mocked checks; live provider tests are opt-in |
+| `docs/` | User guides, design contracts and evaluation protocol |
+| `var/` | Default local artifacts; gitignored |

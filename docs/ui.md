@@ -116,9 +116,7 @@ Choose **Compare** in the sidebar, select **suites**, choose Left and Right, the
 | Observed attempts / n | Retained attempts in the workspace or selected suite/group |
 | Automatic correct / correct | Attempts that pass culprit, mechanism and cited-key-evidence checks |
 | Execution failures / failures | Runs with failed or resource-exhausted execution status; different from wrong diagnoses |
-| pass@1 | Correct attempts divided by observed attempts |
-| pass@k | Estimated probability of at least one correct result in k sampled observed attempts |
-| pass^k | Estimated probability all k sampled observed attempts are correct |
+| pass@1, pass@k, pass^k | Repeat-based success estimates; see [evaluation](evaluation.md#repeats-and-reliability-metrics) |
 | Effective k | Requested k clamped to observed group size |
 | Calls | Admitted model and tool attempts, including retries |
 | Trace events / events | Local event records, including validation and transitions |
