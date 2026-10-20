@@ -118,6 +118,8 @@ def build_command(
     else:
         output = root / "suites" / job_id
         argv += [
+            "--set",
+            "all",
             "--faults",
             ",".join(request.faults),
             "--models",

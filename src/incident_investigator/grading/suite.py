@@ -277,7 +277,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
             else list(FAMILIES) + list(CASES)
         )
         if args.faults != "all":
-            faults = args.faults.split(",")
+            requested = args.faults.split(",")
+            if set(requested) - set(faults):
+                raise ValueError(f"--faults must be a subset of --set {selection}")
+            faults = requested
     else:
         faults = list(FAMILIES) if args.faults == "all" else args.faults.split(",")
     selected_system = getattr(args, "system", "multi")

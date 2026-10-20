@@ -555,7 +555,7 @@ def test_m5_cases_and_system_choices_reach_cli_and_leaderboard(repo, tmp_path):
         RunRequest(faults=["case-04"], system="both"), repo, "paired", root=tmp_path
     )
     parsed = cli.build_parser().parse_args(command[4:])
-    assert parsed.system == "both" and parsed.faults == "case-04"
+    assert parsed.system == "both" and parsed.faults == "case-04" and parsed.set == "all"
     rows = suite_metrics(
         [
             {"fault": "case-04", "model": "scripted", "graph": graph, "verdict": "correct"}

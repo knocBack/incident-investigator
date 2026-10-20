@@ -312,6 +312,34 @@ async def test_suite_pairs_snapshots_and_separates_reliability(tmp_path):
             assert metrics["resources"]["cost"] is None
 
 
+@pytest.mark.parametrize(
+    ("selection", "faults"),
+    [("primary", "reliability-01"), ("variants", "case-02"), ("all", "unknown")],
+)
+async def test_suite_faults_must_narrow_the_named_set(tmp_path, selection, faults):
+    from incident_investigator import cli
+
+    out = tmp_path / "rejected"
+    args = cli.build_parser().parse_args(
+        [
+            "eval-suite",
+            "--model",
+            "scripted",
+            "--models",
+            "scripted",
+            "--set",
+            selection,
+            "--faults",
+            faults,
+            "--out",
+            str(out),
+        ]
+    )
+    with pytest.raises(ValueError, match="must be a subset"):
+        await run_suite(args)
+    assert not out.exists()
+
+
 async def test_run_and_suite_spend_limits_both_apply():
     from decimal import Decimal
 
