@@ -442,9 +442,7 @@ async def test_unbilled_admission_refusal_preserves_completed_usage(tmp_path):
     class RefuseAfterCall(CaseScript):
         async def complete(self, messages, schema):
             if self.requests:
-                raise ModelCallError(
-                    "local reservation refused", retryable=False, before_response=True
-                )
+                raise ModelCallError("local reservation refused", retryable=False, before_send=True)
             response = await super().complete(messages, schema)
             return replace(response, usage=ModelUsage(123, 45, 0.001))
 

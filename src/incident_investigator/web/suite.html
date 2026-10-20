@@ -15,7 +15,7 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Fault / model / graph</th>
+                        <th>Incident / system / model / graph</th>
                         <th>n / correct</th>
                         <th>pass@1</th>
                         <th>pass@k</th>
@@ -27,7 +27,7 @@
                     {% for row in metrics %}
                         <tr>
                             <td>
-                                {{ row.fault }}<small>{{ row.model }} · {{ row.graph }}</small>
+                                {{ row.fault }}<small>{{ row.system }} · {{ row.model }} · {{ row.graph }}</small>
                             </td>
                             <td>{{ row.n }} / {{ row.correct }}</td>
                             <td>{{ '%.3f'|format(row.pass1) }}</td>

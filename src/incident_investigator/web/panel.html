@@ -56,6 +56,13 @@
                             OpenRouter model id<input name="model_id" placeholder="organization/model">
                         </label>
                         <label class="field">
+                            System<select name="system">
+                                <option value="multi">multi</option>
+                                <option value="single">single</option>
+                                <option value="both">both (eval-suite)</option>
+                            </select>
+                        </label>
+                        <label class="field">
                             Graph<select name="graph">
                             {% for graph in graphs %}
                                 <option>{{ graph }}</option>

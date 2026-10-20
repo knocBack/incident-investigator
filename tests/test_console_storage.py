@@ -536,3 +536,34 @@ def test_unfinished_run_keeps_source_and_metadata(repo):
     with TestClient(create_console(repo)) as client:
         assert "http://127.0.0.1:6006/projects/project/traces/live-trace" in client.get("/").text
         assert "Full frozen input retained" in client.get(f"/runs/{run['id']}?tab=evidence").text
+
+
+def test_m5_cases_and_system_choices_reach_cli_and_leaderboard(repo, tmp_path):
+    ids = {
+        fault["id"] for fault in repo.catalog.faults() if fault["injectable"] and fault["evaluable"]
+    }
+    assert {
+        "case-02",
+        "case-04",
+        "case-06",
+        "case-08",
+        "case-10",
+        "reliability-01",
+        "reliability-02",
+    } <= ids
+    command, _ = build_command(
+        RunRequest(faults=["case-04"], system="both"), repo, "paired", root=tmp_path
+    )
+    parsed = cli.build_parser().parse_args(command[4:])
+    assert parsed.system == "both" and parsed.faults == "case-04"
+    rows = suite_metrics(
+        [
+            {"fault": "case-04", "model": "scripted", "graph": graph, "verdict": "correct"}
+            for graph in ("staged", "single")
+        ],
+        1,
+    )
+    assert {row["system"] for row in rows} == {"multi", "single"}
+    with TestClient(create_console(repo)) as client:
+        panel = client.get("/run").text
+        assert 'name="system"' in panel and 'value="single"' in panel

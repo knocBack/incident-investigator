@@ -45,6 +45,7 @@ class RunRequest(BaseModel):
     provider: Literal["scripted", "openrouter"] = "scripted"
     model_id: str = Field(default="", max_length=200)
     graph: str = DEFAULT_GRAPH
+    system: Literal["multi", "single", "both"] = "multi"
     limits_profile: str = "demo"
     repeats: int = Field(default=1, ge=1, le=20)
     concurrency: int = Field(default=2, ge=1, le=8)
@@ -136,7 +137,9 @@ def build_command(
         "--limits-profile",
         request.limits_profile,
     ]
-    argv += ["--graph", request.graph]
+    if request.command == "demo" and request.system == "both":
+        raise ValueError("use eval-suite to compare both systems")
+    argv += ["--graph", request.graph, "--system", request.system]
     if request.trace:
         argv += ["--trace", "phoenix"]
     if request.provider == "scripted":

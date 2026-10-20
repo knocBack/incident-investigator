@@ -249,12 +249,15 @@ class FileEvalCatalog(MemoryEvalCatalog):
     def __init__(self, directory: Path | None = None, injectable=None):
         from incident_investigator.grading.grader import EXPECTED
         from incident_investigator.lab.app import FAULTS
+        from incident_investigator.lab.cases import SECOND_CASES, VARIANTS
         from incident_investigator.workspace import read_json
 
         folder = directory if directory is not None else EXPECTED / "faults"
+        definitions = {p.stem: read_json(p) for p in folder.glob("*.json")}
+        if directory is None:
+            definitions.update({p.stem: read_json(p) for p in (EXPECTED / "cases").glob("*.json")})
         super().__init__(
-            {p.stem: read_json(p) for p in folder.glob("*.json")},
-            FAULTS if injectable is None else injectable,
+            definitions, (*FAULTS, *SECOND_CASES, *VARIANTS) if injectable is None else injectable
         )
 
 

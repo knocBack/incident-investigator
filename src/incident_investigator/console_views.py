@@ -70,6 +70,7 @@ def suite_metrics(runs, k):
                 "fault": fault,
                 "model": model,
                 "graph": graph,
+                "system": "single" if graph == "single" else "multi",
                 "n": n,
                 "correct": correct,
                 "pass1": correct / n,

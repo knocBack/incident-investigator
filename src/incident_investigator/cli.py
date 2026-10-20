@@ -211,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--fault",
                 default="bad_configuration",
-                choices=FAULTS,
+                choices=[*FAULTS, *SECOND_CASES, *VARIANTS],
             )
     from incident_investigator.grading.suite import add_commands
 

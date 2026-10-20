@@ -61,6 +61,7 @@ if (form && form.dataset.enabled === "yes") {
       provider: data.get("provider"),
       model_id: data.get("model_id"),
       graph: data.get("graph"),
+      system: data.get("system"),
       limits_profile: data.get("limits_profile"),
       repeats: Number(data.get("repeats")),
       concurrency: Number(data.get("concurrency")),
