@@ -200,6 +200,33 @@ def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path):
     assert jobs.get("live")["runs"][0]["phoenix_url"] is None
 
 
+def test_interrupted_export_counts_as_execution_failure(repo):
+    import re
+
+    repo.artifacts.save_json(
+        "runs/interrupted/result.json",
+        {
+            "run_id": "interrupted",
+            "status": "interrupted",
+            "graph": "staged",
+            "system": "single",
+        },
+    )
+    repo.artifacts.save_json(
+        "runs/interrupted/grade.json",
+        {
+            "run_id": "interrupted",
+            "family": "case-02",
+            "verdict": "no_report",
+            "process": {"execution_status": "interrupted"},
+        },
+    )
+    with TestClient(create_console(repo)) as client:
+        page = client.get("/")
+        assert page.status_code == 200
+        assert re.search(r"<label>Execution failures</label>\s*<strong>1</strong>", page.text)
+
+
 async def test_bundled_paired_script_completes_both_systems_on_staged(tmp_path):
     args = cli.build_parser().parse_args(
         [

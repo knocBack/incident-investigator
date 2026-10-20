@@ -119,7 +119,9 @@ def summary(runs):
     return {
         "runs": len(runs),
         "correct": sum(r["verdict"] == "correct" for r in runs),
-        "failures": sum(r["status"] in {"failed", "resource_exhausted"} for r in runs),
+        "failures": sum(
+            r["status"] in {"failed", "resource_exhausted", "interrupted"} for r in runs
+        ),
         "cost": total(runs, "cost"),
         "known_cost": total(runs, "known_cost"),
         "calls": sum(r["calls"] for r in runs),
