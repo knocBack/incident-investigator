@@ -187,7 +187,7 @@ async def test_case_fixture_and_grader_controls(tmp_path, case):
 
 
 @pytest.mark.parametrize("case", list(SECOND_CASES) + list(VARIANTS))
-@pytest.mark.parametrize("system", ["staged", "single"])
+@pytest.mark.parametrize("system", ["multi", "single"])
 async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
     source = tmp_path / "source"
     source.mkdir()
@@ -198,7 +198,7 @@ async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
         snap,
         model,
         tmp_path / "runs",
-        graph=system,
+        system=system,
         limits=Limits(call_seconds=0.3, wall_seconds=20),
     )
     result = json.loads((directory / "result.json").read_text())
@@ -370,7 +370,7 @@ async def test_single_total_allowance_exceeds_specialist_allowance(tmp_path):
         load_snapshot("case-02", source),
         CaseScript("case-02"),
         tmp_path / "runs",
-        graph="single",
+        system="single",
         limits=Limits(task_model_calls=1, task_tool_calls=1),
     )
     result = json.loads((directory / "result.json").read_text())
@@ -381,7 +381,11 @@ async def test_single_total_allowance_exceeds_specialist_allowance(tmp_path):
     assert await investigate(None, replay, resume=directory) == directory
     assert replay.requests == []
     resumed = json.loads((directory / "result.json").read_text())
-    assert resumed["graph"] == "single" and resumed["usage"] == result["usage"]
+    assert (
+        resumed["system"] == "single"
+        and resumed["graph"] == "staged"
+        and resumed["usage"] == result["usage"]
+    )
 
 
 async def test_three_run_concurrent_suite_fits_eleven_cent_budget(tmp_path):
@@ -481,7 +485,7 @@ async def test_unbilled_admission_refusal_preserves_completed_usage(tmp_path):
         load_snapshot("case-04", source),
         RefuseAfterCall("case-04"),
         tmp_path / "runs",
-        graph="single",
+        system="single",
     )
     result = json.loads((directory / "result.json").read_text())
     assert result["usage"]["single"]["input_tokens"] == 123

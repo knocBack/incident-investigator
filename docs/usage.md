@@ -105,7 +105,9 @@ uv run incident-investigator eval-suite --model scripted --models scripted \
   --script tests/scripted-demo.json --quick --budget-usd 0
 ```
 
-`--quick` defaults to all five faults once at concurrency five. `--repeats` and `--concurrency` override those defaults. `--faults` accepts `all` or comma-separated lab family IDs. `--models` accepts comma-separated model IDs. Every attempt gets fresh lab/model state. Explicit output directories must be new.
+`--set primary|variants|all` selects the ten incidents, two reliability variants, or both. `--system multi|single|both` selects investigators under the staged workflow. `--faults` narrows the chosen set. `--run-budget-usd`, `--call-seconds` and `--wall-seconds` override per-run cost and finite time limits equally for both systems.
+
+`--quick` defaults to the selected set once at concurrency five. `--repeats` and `--concurrency` override those defaults. `--faults` accepts `all` or comma-separated lab family IDs. `--models` accepts comma-separated model IDs. Every attempt gets fresh lab/model state. Explicit output directories must be new.
 
 `--k` sets the pass@k/pass^k cap (default four). Effective k is clamped to the observed attempts in each fault/model/workflow group. Grades, rubric worksheets, `leaderboard.json` and `leaderboard.md` retain outcomes and resources. See [evaluation](evaluation.md) for definitions and limitations.
 

@@ -23,8 +23,10 @@ def test_tracing_disabled_imports_no_sdk(monkeypatch, tmp_path):
 
     monkeypatch.setenv("II_PHOENIX", "0")
     monkeypatch.setattr(builtins, "__import__", guarded)
-    with TraceSession("test", "case") as observer:
+    with TraceSession("test", "case", system="single") as observer:
         assert observer.tracer is None
+        assert observer.attributes["system"] == "single"
+        assert observer.attributes["graph"] == "staged"
         asyncio.run(observer.save_link(tmp_path))
     assert not (tmp_path / "phoenix.json").exists()
 
@@ -93,6 +95,7 @@ async def test_real_runtime_span_parentage_and_payloads(monkeypatch, tmp_path):
     )
     spans = exporter.get_finished_spans()
     root = next(s for s in spans if s.name == "investigation")
+    assert root.attributes["system"] == "multi"
     roles = {
         s.context.span_id: s
         for s in spans

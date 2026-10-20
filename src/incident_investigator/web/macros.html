@@ -11,7 +11,7 @@
             <strong>{{ s.runs }}</strong>
         </div>
         <div class="stat">
-            <label>Automatic correct</label>
+            <label>Diagnostic correct</label>
             <strong>{{ s.correct }}</strong>
         </div>
         <div class="stat">
@@ -30,7 +30,7 @@
             <thead>
                 <tr>
                     <th>Fault / Run</th>
-                    <th>Model / Graph</th>
+                    <th>Model / System / Set</th>
                     <th>Verdict / Execution</th>
                     <th class="number">Cost / Tokens in·out</th>
                     <th class="number">Wall / Calls</th>
@@ -50,7 +50,7 @@
                             <small>{{ r.created_at }}</small>
                         </td>
                         <td>
-                            {{ r.model or 'unknown' }}<small>{{ r.graph }}</small>
+                            {{ r.model or 'unknown' }}<small>{{ r.system }} · {{ r.case_set }} · {{ r.graph }}</small>
                         </td>
                         <td>
                             {{ badge(r.verdict) }}<small>{{ r.status }}</small>
@@ -62,8 +62,8 @@
                             {% endif %}
                         </td>
                         <td class="number">
-                            {% if r.cost is not none %}{{ '%.5f'|format(r.cost) }}{% else %}unknown{% endif %}
-                            <small>{{ value(r.input_tokens) }} / {{ value(r.output_tokens) }}</small>
+                            {{ measured(r.cost, r.known_cost, 6) }}
+                            <small>{{ measured(r.input_tokens, r.known_input_tokens, 0) }} / {{ measured(r.output_tokens, r.known_output_tokens, 0) }}</small>
                         </td>
                         <td class="number">
                             {% if r.wall_seconds is not none %}{{ '%.1f'|format(r.wall_seconds) }}s{% else %}unknown{% endif %}
@@ -83,4 +83,24 @@
             </tbody>
         </table>
     </div>
+{% endmacro %}
+{% macro measured(v, known=none, digits=2) -%}
+    {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}unknown{% if known is number %}<small>known {{ ('%.' ~ digits ~ 'f')|format(known) }}</small>{% endif %}{% endif %}
+{%- endmacro %}
+{% macro resources(r) %}
+    <div class="check-row"><span>Cost USD</span><span>{{ measured(r.cost, r.known_cost, 6) }}</span></div>
+    <div class="check-row"><span>Input tokens</span><span>{{ measured(r.input_tokens, r.known_input_tokens, 0) }}</span></div>
+    <div class="check-row"><span>Output tokens</span><span>{{ measured(r.output_tokens, r.known_output_tokens, 0) }}</span></div>
+    <div class="check-row"><span>Model / tool calls</span><span>{{ value(r.model_calls) }} / {{ value(r.tool_calls) }}</span></div>
+    <div class="check-row"><span>Wall seconds</span><span>{{ measured(r.wall_seconds) }}</span></div>
+{% endmacro %}
+{% macro result_card(row) %}
+    {% if row %}
+        <p>{{ row.verdicts|pretty }}{% if row.provisional %}<small>Provisional: includes ungraded attempts</small>{% endif %}</p>
+        <p>pass@1 {{ '%.3f'|format(row.pass1) }} · pass@k {{ '%.3f'|format(row.passk) }} · pass^k {{ '%.3f'|format(row.powerk) }} (k={{ row.k }})</p>
+        {{ resources(row.resources) }}
+        {% for run in row.runs %}
+            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.status }}</a></p>{% endif %}
+        {% endfor %}
+    {% else %}<p>No observed attempt.</p>{% endif %}
 {% endmacro %}

@@ -102,6 +102,7 @@ class Control(Record):
     case_id: str
     limits: Limits
     graph: GraphVariant = DEFAULT_GRAPH
+    system: Literal["multi", "single"] = "multi"
     revision: int = 0
     status: Literal[
         "running", "completed", "inconclusive", "interrupted", "failed", "resource_exhausted"
@@ -211,24 +212,31 @@ class Investigation:
         *,
         faults: dict[str, FaultSelection] | None = None,
         graph: GraphVariant = DEFAULT_GRAPH,
+        system: Literal["multi", "single"] = "multi",
     ) -> None:
-        if graph not in {"staged", "single"}:
+        if graph != DEFAULT_GRAPH:
             raise ValueError(f"unknown graph: {graph}")
         self.snapshot, self.model, self.out, self.limits = snapshot, model, out, limits
         self.semaphore = semaphore
         self.registry = build_registry(snapshot)
         self.faults = faults or {}
         self.variant = graph
+        if system not in {"multi", "single"}:
+            raise ValueError(f"unknown system: {system}")
+        self.system = system
         self.invocation_id = identity()
         self.started = time.monotonic()
         self.deadline = self.started + limits.wall_seconds
-        self.observer = TraceSession(out.name, snapshot.case_id, graph=graph, enabled=False)
+        self.observer = TraceSession(
+            out.name, snapshot.case_id, graph=graph, system=system, enabled=False
+        )
         self.adapters = {role: TypeAdapter(action_type(body)) for role, body in PAYLOADS.items()}
 
     def trace(self, event: str, **values: Any) -> None:
         row = {
             "run_id": self.out.name,
             "graph": self.variant,
+            "system": self.system,
             "event": event,
             "at": time.time(),
             **values,
@@ -958,7 +966,7 @@ class Investigation:
 
     def graph(self):
         """Select a workflow while sharing admission, execution and receipts."""
-        if self.variant == "single":
+        if self.system == "single":
             from incident_investigator.single import build_single_graph
 
             return build_single_graph(self)
@@ -967,7 +975,7 @@ class Investigation:
         return build_staged_graph(self)
 
 
-def model_names(model: ModelAdapter, graph: GraphVariant = DEFAULT_GRAPH) -> dict[str, str]:
+def model_names(model: ModelAdapter, system: str = "multi") -> dict[str, str]:
     resolve = getattr(model, "model_for_role", None)
     return {
         role: resolve(role)
@@ -977,7 +985,7 @@ def model_names(model: ModelAdapter, graph: GraphVariant = DEFAULT_GRAPH) -> dic
         else "gpt-6-luna"
         if isinstance(model, CodexExecModel)
         else type(model).__name__
-        for role in (["single"] if graph == "single" else [r for r in PAYLOADS if r != "single"])
+        for role in (["single"] if system == "single" else [r for r in PAYLOADS if r != "single"])
     }
 
 
@@ -1006,6 +1014,7 @@ async def investigate(
     semaphore: asyncio.Semaphore | None = None,
     faults: dict[str, FaultSelection] | None = None,
     graph: GraphVariant = DEFAULT_GRAPH,
+    system: Literal["multi", "single"] = "multi",
     resume: Path | None = None,
     _run_id: str | None = None,
 ) -> Path:
@@ -1015,20 +1024,21 @@ async def investigate(
     from incident_investigator.reporting import export_report, retain_snapshot
     from incident_investigator.workspace import home, write_json
 
-    if graph not in {"staged", "single"}:
+    if graph != DEFAULT_GRAPH:
         raise ValueError(f"unknown graph: {graph}")
     out = out if out is not None else home() / "runs"
     run_dir = Path(resume) if resume else out / (_run_id or identity())
     if not resume:
         run_dir.mkdir(parents=True, exist_ok=False)
     with invocation_lock(run_dir):
-        models = model_names(model, graph)
+        models = model_names(model, system)
         if resume:
             metadata, restored = resume_metadata(run_dir)
             if snapshot is not None and snapshot.dataset_digest != restored.dataset_digest:
                 raise ValueError("incompatible resume dataset")
             snapshot = restored
-            models = model_names(model, metadata["graph"])
+            system = metadata.get("system", "multi")
+            models = model_names(model, system)
             if models != metadata["models"]:
                 raise ValueError("incompatible resume model configuration")
             if limits is not None and limits.model_dump() != metadata["limits"]:
@@ -1048,6 +1058,7 @@ async def investigate(
                 "case_id": snapshot.case_id,
                 "limits": limits.model_dump(),
                 "graph": graph,
+                "system": system,
                 "models": models,
                 "deadline_at": time.time() + limits.wall_seconds,
                 "versions": versions(snapshot),
@@ -1071,6 +1082,7 @@ async def investigate(
             semaphore or asyncio.Semaphore(4),
             faults=faults,
             graph=graph,
+            system=system,
         )
         runner.deadline = time.monotonic() + max(0, metadata["deadline_at"] - time.time())
         initial = Control(
@@ -1079,13 +1091,16 @@ async def investigate(
             limits=limits,
             models=models,
             graph=graph,
+            system=system,
         )
         config = {
             "configurable": {"thread_id": metadata["run_id"]},
             "callbacks": [],
             "recursion_limit": 1000,
         }
-        with TraceSession(metadata["run_id"], snapshot.case_id, graph=graph) as observer:
+        with TraceSession(
+            metadata["run_id"], snapshot.case_id, graph=graph, system=system
+        ) as observer:
             runner.observer = observer
             await observer.save_link(run_dir, final=False)
             async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:

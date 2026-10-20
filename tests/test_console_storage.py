@@ -371,8 +371,20 @@ def test_fault_discovery_and_catalog_contract(tmp_path):
         MemoryEvalCatalog(definitions, injectable=["new-fault", "lab-only"]),
     ):
         assert catalog.faults() == [
-            {"id": "lab-only", "injectable": True, "evaluable": False, "version": "lab registry"},
-            {"id": "new-fault", "injectable": True, "evaluable": True, "version": "test.v2"},
+            {
+                "id": "lab-only",
+                "case_set": "primary",
+                "injectable": True,
+                "evaluable": False,
+                "version": "lab registry",
+            },
+            {
+                "id": "new-fault",
+                "case_set": "primary",
+                "injectable": True,
+                "evaluable": True,
+                "version": "test.v2",
+            },
         ]
         result = catalog.expected("new-fault")
         result["answer"] = "changed"
@@ -483,7 +495,7 @@ def test_real_cli_job_stream_and_default_workspace(tmp_path):
         assert suite_metrics(attempts, 1)[0]["n"] == 1
         page = client.get(f"/suites/{grading_suite['id']}?k=1")
         assert page.status_code == 200
-        assert "1 / 0" in page.text and "0.000" in page.text
+        assert "0 / 1" in page.text and "0.000" in page.text
         assert "No runs found" not in page.text
         assert f"/runs/{run['id']}" in page.text
         comparison = client.get("/compare", params={"kind": "suites", "left": grading_suite["id"]})
@@ -555,11 +567,17 @@ def test_m5_cases_and_system_choices_reach_cli_and_leaderboard(repo, tmp_path):
         RunRequest(faults=["case-04"], system="both"), repo, "paired", root=tmp_path
     )
     parsed = cli.build_parser().parse_args(command[4:])
-    assert parsed.system == "both" and parsed.faults == "case-04" and parsed.set == "all"
+    assert parsed.system == "both" and parsed.faults == "case-04" and parsed.set == "primary"
     rows = suite_metrics(
         [
-            {"fault": "case-04", "model": "scripted", "graph": graph, "verdict": "correct"}
-            for graph in ("staged", "single")
+            {
+                "fault": "case-04",
+                "model": "scripted",
+                "graph": "staged",
+                "system": system,
+                "verdict": "correct",
+            }
+            for system in ("multi", "single")
         ],
         1,
     )

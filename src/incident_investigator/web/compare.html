@@ -15,7 +15,7 @@
                 <option value="">Select</option>
                 {% for option in options %}
                     <option value="{{ option.id }}"
-                            {% if (left if side == 'left' else right) == option.id %}selected{% endif %}>{{ option.get('fault',option.get('name')) }} · {{ option.get('graph', 'suite') }} · {{ option.id[:8] }}</option>
+                            {% if (left if side == 'left' else right) == option.id %}selected{% endif %}>{{ option.get('fault',option.get('name')) }} · {{ option.get('system', 'suite') }} · {{ option.get('case_set', option.get('batch',{}).get('suite_set', 'legacy')) }} · {{ option.id[:8] }}</option>
                 {% endfor %}
                 </select>
             </label>

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import html
 import json
+from collections import Counter
 from datetime import datetime
 
 from markdown_it import MarkdownIt
 from markupsafe import Markup
 
-from incident_investigator.grading.suite import _pass_metrics
+from incident_investigator.grading.suite import _pass_metrics, reliability_metrics
+from incident_investigator.graph_config import recorded_system
+from incident_investigator.workspace import total
 
 
 def pretty(value):
@@ -58,9 +61,18 @@ def observations(rows, params):
 def suite_metrics(runs, k):
     groups = {}
     for run in runs:
-        groups.setdefault((run["fault"], run["model"], run["graph"]), []).append(run)
+        groups.setdefault(
+            (
+                run["fault"],
+                run["model"],
+                run["graph"],
+                recorded_system(run.get("system"), run["graph"]),
+                run.get("case_set", "primary"),
+            ),
+            [],
+        ).append(run)
     rows = []
-    for (fault, model, graph), items in sorted(groups.items()):
+    for (fault, model, graph, system, case_set), items in sorted(groups.items()):
         n = len(items)
         correct = sum(r["verdict"] == "correct" for r in items)
         effective_k = min(k, n)
@@ -70,7 +82,26 @@ def suite_metrics(runs, k):
                 "fault": fault,
                 "model": model,
                 "graph": graph,
-                "system": "single" if graph == "single" else "multi",
+                "system": system,
+                "case_set": case_set,
+                "verdicts": dict(Counter(r["verdict"] for r in items)),
+                "provisional": any(r["verdict"] == "ungraded" for r in items),
+                "reliability": reliability_metrics([r.get("grade", {}) for r in items]),
+                "resources": {
+                    field: total(items, field)
+                    for field in (
+                        "cost",
+                        "known_cost",
+                        "input_tokens",
+                        "output_tokens",
+                        "known_input_tokens",
+                        "known_output_tokens",
+                        "model_calls",
+                        "tool_calls",
+                        "wall_seconds",
+                    )
+                },
+                "runs": items,
                 "n": n,
                 "correct": correct,
                 "pass1": correct / n,
@@ -90,7 +121,17 @@ def summary(runs):
         "correct": sum(r["verdict"] == "correct" for r in runs),
         "failures": sum(r["status"] in {"failed", "resource_exhausted"} for r in runs),
         "cost": total(runs, "cost"),
+        "known_cost": total(runs, "known_cost"),
         "calls": sum(r["calls"] for r in runs),
         "events": sum(r["events"] for r in runs),
         "wall_seconds": total(runs, "wall_seconds"),
     }
+
+
+def paired_metrics(metrics):
+    pairs = {}
+    for row in metrics:
+        key = (row["fault"], row["model"], row["case_set"])
+        pair = pairs.setdefault(key, {"fault": key[0], "model": key[1], "case_set": key[2]})
+        pair[row["system"]] = row
+    return [pairs[key] for key in sorted(pairs)]

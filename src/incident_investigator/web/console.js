@@ -60,12 +60,17 @@ if (form && form.dataset.enabled === "yes") {
       faults: data.getAll("faults"),
       provider: data.get("provider"),
       model_id: data.get("model_id"),
-      graph: data.get("graph"),
+      graph: "staged",
+      case_set: data.get("case_set"),
       system: data.get("system"),
       limits_profile: data.get("limits_profile"),
       repeats: Number(data.get("repeats")),
       concurrency: Number(data.get("concurrency")),
       budget_usd: data.get("budget_usd"),
+      run_budget_usd: data.get("run_budget_usd") || null,
+      call_seconds: data.get("call_seconds") ? Number(data.get("call_seconds")) : null,
+      wall_seconds: data.get("wall_seconds") ? Number(data.get("wall_seconds")) : null,
+      max_input_tokens: Number(data.get("max_input_tokens")),
       confirm_paid: data.has("confirm_paid"),
       trace: data.has("trace"),
       run: data.get("run") || null,
@@ -88,6 +93,15 @@ if (form && form.dataset.enabled === "yes") {
     }
   }
   document.getElementById("preview-command").addEventListener("click", update);
+  function selectSet() {
+    for (const input of form.querySelectorAll('input[name="faults"]')) {
+      const allowed = form.elements.case_set.value === "all" || input.dataset.set === form.elements.case_set.value;
+      input.closest("label").hidden = !allowed;
+      if (!allowed) input.checked = false;
+    }
+  }
+  form.elements.case_set.addEventListener("change", selectSet);
+  selectSet();
   form.addEventListener("change", update);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -114,24 +128,32 @@ if (output) {
       job.exit_code === undefined
         ? job.error || ""
         : "Exit code: " + job.exit_code;
-    if (job.status !== "running") {
-      stream.close();
-      const runs = document.getElementById("job-runs");
-      runs.replaceChildren();
-      for (const run of job.runs || []) {
-        const p = document.createElement("p"),
-          a = document.createElement("a");
-        a.href = "/runs/" + encodeURIComponent(run.id);
-        a.textContent = run.fault + " · " + run.verdict + " · " + run.run_id;
-        p.append(a);
-        runs.append(p);
+    if (job.status !== "running") stream.close();
+    const runs = document.getElementById("job-runs");
+    runs.replaceChildren();
+    for (const suite of job.suites || []) {
+      const p = document.createElement("p"), a = document.createElement("a");
+      a.href = "/suites/" + encodeURIComponent(suite.id);
+      a.textContent = "Suite leaderboard · " + suite.name;
+      p.append(a); runs.append(p);
+    }
+    for (const run of job.runs || []) {
+      const p = document.createElement("p"), a = document.createElement("a");
+      a.href = "/runs/" + encodeURIComponent(run.id);
+      a.textContent = [run.fault, run.system, run.case_set, run.status, run.verdict].join(" · ");
+      p.append(a);
+      if (run.phoenix_url) {
+        const trace = document.createElement("a");
+        trace.href = run.phoenix_url; trace.target = "_blank"; trace.rel = "noreferrer";
+        trace.textContent = "Open in Phoenix"; trace.className = "button small";
+        p.append(" ", trace);
       }
-      if (!(job.runs || []).length) {
-        const p = document.createElement("p");
-        p.textContent =
-          "No new run artifacts. Grading jobs update the existing run; return to the runs list.";
-        runs.append(p);
-      }
+      runs.append(p);
+    }
+    if (!(job.runs || []).length) {
+      const p = document.createElement("p");
+      p.textContent = job.status === "running" ? "Waiting for the first admitted run..." : "No new run artifacts. Grading jobs update the existing run.";
+      runs.append(p);
     }
   };
   stream.onerror = () => {

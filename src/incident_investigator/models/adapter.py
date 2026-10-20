@@ -59,17 +59,17 @@ class ModelAdapter(Protocol):
 class ScriptedModel:
     """A FIFO deterministic double. Each action must be a tagged model action object."""
 
-    def __init__(self, actions: Sequence[dict[str, Any]] = ()) -> None:
-        self.actions = deque(actions)
+    def __init__(self, actions: Sequence[dict[str, Any]] | Mapping[str, Any] = ()) -> None:
+        self.system_actions = dict(actions) if isinstance(actions, Mapping) else None
+        if self.system_actions is not None and set(self.system_actions) != {"multi", "single"}:
+            raise ValueError("paired scripts require multi and single action lists")
+        self.actions = deque(() if self.system_actions is not None else actions)
         self.requests: list[tuple[Sequence[Mapping[str, Any]], dict[str, Any]]] = []
 
     async def complete(
         self, messages: Sequence[Mapping[str, Any]], schema: dict[str, Any]
     ) -> ModelResult:
         self.requests.append((messages, schema))
-        if not self.actions:
-            raise RuntimeError("ScriptedModel has no queued action")
-        action = self.actions.popleft()
         # Generic context substitution keeps replay data in caller-owned scripts.
         context = {}
         for message in messages:
@@ -80,6 +80,14 @@ class ScriptedModel:
             if isinstance(candidate, dict) and "role" in candidate:
                 context = candidate
                 break
+
+        if self.system_actions is not None:
+            system = "single" if context.get("role") == "single" else "multi"
+            self.actions.extend(self.system_actions[system])
+            self.system_actions = None
+        if not self.actions:
+            raise RuntimeError("ScriptedModel has no queued action")
+        action = self.actions.popleft()
 
         def resolve(value):
             if isinstance(value, str) and value.startswith("{{context.") and value.endswith("}}"):

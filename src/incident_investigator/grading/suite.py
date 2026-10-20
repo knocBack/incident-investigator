@@ -31,7 +31,12 @@ from incident_investigator.grading.grader import (
     grade_run,
     measured_sum,
 )
-from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument, recorded_graph
+from incident_investigator.graph_config import (
+    DEFAULT_GRAPH,
+    add_graph_argument,
+    recorded_graph,
+    recorded_system,
+)
 from incident_investigator.lab.cases import SECOND_CASES, VARIANTS
 from incident_investigator.workspace import batch_output
 
@@ -120,13 +125,14 @@ def leaderboard(grades, out, skipped=(), k=4):
     for g in grades:
         models = g.get("models", {})
         name = (
+            recorded_system(g.get("system"), g.get("graph")),
             recorded_graph(g.get("graph")),
             g.get("suite_kind", "primary"),
             json.dumps(models, sort_keys=True),
         )
         groups.setdefault(name, []).append(g)
     rows = []
-    for (graph, suite_kind, name), items in groups.items():
+    for (system, graph, suite_kind, name), items in groups.items():
 
         def mean(field, items=items):
             values = [g["resources"]["totals"].get(field) for g in items]
@@ -139,7 +145,7 @@ def leaderboard(grades, out, skipped=(), k=4):
             {
                 "models": json.loads(name),
                 "graph": graph,
-                "system": "single" if graph == "single" else "multi",
+                "system": system,
                 "suite_kind": suite_kind,
                 "runs": len(items),
                 "accuracy": sum(g["verdict"] == "correct" for g in items) / len(items),
@@ -300,6 +306,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     out.mkdir(parents=True, exist_ok=False)
     batch = {
         "version": "suite.v2",
+        "launch_id": os.environ.get("II_LAUNCH_ID"),
         "systems": systems,
         "suite_set": selection or "legacy",
         "limits": limits.model_dump(mode="json"),
@@ -426,9 +433,17 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                         adapter = BoundedModel(
                             adapter, catalog, run_guard, max_input_tokens=max_input_tokens
                         )
-                    print(f"Starting {fault} | model {model_id} | repeat {repeat + 1}", flush=True)
+                    print(
+                        f"Starting {fault} | system {system} | model {model_id} | repeat {repeat + 1}",
+                        flush=True,
+                    )
                     started = time.monotonic()
                     run_id = str(uuid4())
+                    (out / "attempts").mkdir(exist_ok=True)
+                    save(
+                        out / "attempts" / f"{run_id}.json",
+                        {"fault": fault, "system": system, "repeat": repeat},
+                    )
                     try:
                         directory = await (demo_fn or cli.demo)(
                             argparse.Namespace(
@@ -465,7 +480,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             {"state": run_guard.snapshot(), "calls": run_guard.records},
                         )
                     g = grade_run(directory, expectation(fault))
-                    g["graph"] = "single" if system == "single" else batch["graph"]
+                    g["graph"] = batch["graph"]
                     g["system"] = system
                     g["suite_kind"] = "reliability" if fault in VARIANTS else "primary"
                     g["case_id"] = fault

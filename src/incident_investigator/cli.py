@@ -63,9 +63,8 @@ async def demo(args) -> Path:
             args.out,
             limits=profile(args),
             _run_id=getattr(args, "_run_id", None),
-            graph="single"
-            if getattr(args, "system", "multi") == "single"
-            else getattr(args, "graph", DEFAULT_GRAPH),
+            graph=getattr(args, "graph", DEFAULT_GRAPH),
+            system=getattr(args, "system", "multi"),
         )
         (directory / "expectation.json").write_text(json.dumps({"family": args.fault}) + "\n")
         return directory
@@ -128,9 +127,8 @@ async def demo(args) -> Path:
                 getattr(args, "_model_adapter", None) or model(args),
                 args.out,
                 limits=profile(args),
-                graph="single"
-                if getattr(args, "system", "multi") == "single"
-                else getattr(args, "graph", DEFAULT_GRAPH),
+                graph=getattr(args, "graph", DEFAULT_GRAPH),
+                system=getattr(args, "system", "multi"),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -160,9 +158,8 @@ async def run(args) -> int:
                     args.out,
                     semaphore=semaphore,
                     limits=profile(args),
-                    graph="single"
-                    if getattr(args, "system", "multi") == "single"
-                    else getattr(args, "graph", DEFAULT_GRAPH),
+                    graph=getattr(args, "graph", DEFAULT_GRAPH),
+                    system=getattr(args, "system", "multi"),
                 )
                 for case in snapshots
             ]

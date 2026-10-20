@@ -19,12 +19,21 @@
                                 {% if request.query_params.get('grade') %}selected{% endif %}>eval · grade a saved run</option>
                         </select>
                     </label>
+                    <label class="field">
+                        Set<select name="case_set" id="case-set">
+                            <option value="primary">primary · ten incidents</option>
+                            <option value="variants">variants · recovery and uncertainty</option>
+                            <option value="all">all · primary and variants</option>
+                        </select>
+                    </label>
+                    <p class="caption">Choose cases below, or leave all unchecked to run the entire selected set.</p>
                     <div class="fault-grid">
                         {% for fault in faults %}
                             <label class="fault-option">
                                 <input type="checkbox"
                                        name="faults"
                                        value="{{ fault.id }}"
+                                       data-set="{{ fault.case_set }}"
                                        {% if not fault.injectable or not fault.evaluable %}disabled{% endif %}
                                        {% if loop.first and not request.query_params.get('grade') %}checked{% endif %}>
                                 <span>{{ fault.id }}<small>{{ fault.version }} · {{ 'injectable' if fault.injectable else 'evaluation only' }}</small>
@@ -53,20 +62,13 @@
                             </select>
                         </label>
                         <label class="field">
-                            OpenRouter model id<input name="model_id" placeholder="organization/model">
+                            OpenRouter model id<input name="model_id" placeholder="organization/model" value="deepseek/deepseek-v3.2">
                         </label>
                         <label class="field">
                             System<select name="system">
                                 <option value="multi">multi</option>
                                 <option value="single">single</option>
                                 <option value="both">both (eval-suite)</option>
-                            </select>
-                        </label>
-                        <label class="field">
-                            Graph<select name="graph">
-                            {% for graph in graphs %}
-                                <option>{{ graph }}</option>
-                            {% endfor %}
                             </select>
                         </label>
                         <label class="field">
@@ -83,12 +85,24 @@
                             Concurrency<input name="concurrency" type="number" min="1" max="8" value="2">
                         </label>
                         <label class="field">
-                            Budget cap USD<input name="budget_usd"
+                            Suite cap USD<input name="budget_usd"
        type="number"
        min="0"
        max="100"
        step=".01"
        value="0">
+                        </label>
+                        <label class="field">
+                            Per-run cap USD<input name="run_budget_usd" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
+                        </label>
+                        <label class="field">
+                            Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="Use profile">
+                        </label>
+                        <label class="field">
+                            Run wall limit (seconds)<input name="wall_seconds" type="number" min=".001" max="3600" step="any" placeholder="Use profile">
+                        </label>
+                        <label class="field">
+                            Max input tokens<input name="max_input_tokens" type="number" min="1" max="2000000" value="64000">
                         </label>
                     </div>
                     <label class="fault-option">

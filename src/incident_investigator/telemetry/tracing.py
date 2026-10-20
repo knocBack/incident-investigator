@@ -63,7 +63,9 @@ def provider(url):
 
 
 class TraceSession:
-    def __init__(self, run_id, case_id, *, graph=DEFAULT_GRAPH, enabled=None, tracer=None):
+    def __init__(
+        self, run_id, case_id, *, graph=DEFAULT_GRAPH, system="multi", enabled=None, tracer=None
+    ):
         self.enabled = enabled if enabled is not None else os.environ.get("II_PHOENIX") == "1"
         self.url = (
             local_url(os.environ.get("II_PHOENIX_URL", "http://127.0.0.1:6006"))
@@ -76,6 +78,7 @@ class TraceSession:
             "run_id": run_id,
             "case_id": case_id,
             "graph": graph,
+            "system": system,
             "session.id": run_id,
         }
         self.tasks = {}

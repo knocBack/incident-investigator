@@ -6,7 +6,7 @@
         <div>
             <span class="eyebrow">{{ run.suite_name or 'Investigation' }} / {{ run.run_id[:8] }}</span>
             <h1>{{ run.fault }}</h1>
-            <p class="subtitle">{{ run.model or 'unknown model' }} · {{ run.graph }} · {{ run.case }}</p>
+            <p class="subtitle">{{ run.model or 'unknown model' }} · {{ run.system }} · {{ run.case_set }} · {{ run.graph }} · {{ run.case }}</p>
         </div>
         <div class="actions">{{ m.badge(run.verdict) }} {{ m.badge(run.status) }}{% if trace.url %}
             <a class="button small"

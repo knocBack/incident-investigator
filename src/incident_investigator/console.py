@@ -22,6 +22,7 @@ from incident_investigator.console_jobs import Jobs, RunRequest, display_command
 from incident_investigator.console_views import (
     markdown,
     observations,
+    paired_metrics,
     pretty,
     suite_metrics,
     summary,
@@ -114,7 +115,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         refresh()
         filters = {
             k: request.query_params.get(k, "")
-            for k in ("fault", "model", "graph", "verdict", "suite")
+            for k in ("fault", "model", "system", "case_set", "verdict", "suite")
         }
         rows = repo.runs.runs(filters, request.query_params.get("sort", "created"))
         options = {k: sorted({r[k] for r in repo.runs.runs() if r[k]}) for k in filters}
@@ -215,6 +216,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         if selected is None:
             raise HTTPException(404, "Unknown suite")
         rows = repo.runs.runs({"suite": ident})
+        metrics = suite_metrics(rows, k)
         return render(
             request,
             "suite.html",
@@ -222,7 +224,8 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             runs=rows,
             stats=summary(rows),
             k=k,
-            metrics=suite_metrics(rows, k),
+            metrics=metrics,
+            paired=paired_metrics(metrics),
         )
 
     @app.get("/compare", response_class=HTMLResponse)
@@ -241,7 +244,21 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
                     {**selected, **summary(repo.runs.runs({"suite": ident}))} if selected else None
                 )
         fields = (
-            ("verdict", "status", "graph", "model", "calls", "events", "cost", "wall_seconds")
+            (
+                "verdict",
+                "status",
+                "system",
+                "case_set",
+                "graph",
+                "model",
+                "model_calls",
+                "tool_calls",
+                "input_tokens",
+                "output_tokens",
+                "cost",
+                "known_cost",
+                "wall_seconds",
+            )
             if kind == "runs"
             else ("runs", "correct", "failures", "calls", "events", "cost", "wall_seconds")
         )

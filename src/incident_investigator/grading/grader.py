@@ -10,7 +10,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from incident_investigator.graph_config import recorded_graph
+from incident_investigator.graph_config import recorded_graph, recorded_system
 
 VERSION = "grader.v3"
 _SOURCE_EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
@@ -267,7 +267,7 @@ def grade(result, expected, events=()):
         "family": expected["family"],
         "run_id": result.get("run_id"),
         "graph": recorded_graph(result.get("graph")),
-        "system": "single" if result.get("graph") == "single" else "multi",
+        "system": recorded_system(result.get("system"), result.get("graph")),
         "case_id": result.get("case_id"),
         "suite_kind": "reliability"
         if expected.get("expected_diagnosis") or expected.get("reliability")

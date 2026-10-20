@@ -57,3 +57,4 @@ packages = ["src/incident_investigator"]
 [tool.hatch.build.targets.wheel.force-include]
 "evals/expected" = "incident_investigator/grading/expected"
 "tests/scripted-demo.json" = "incident_investigator/scripted-demo.json"
+"tests/scripted-paired.json" = "incident_investigator/scripted-paired.json"

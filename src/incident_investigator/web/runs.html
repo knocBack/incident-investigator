@@ -13,7 +13,7 @@
     <form class="filters" method="get">
         {% for key, opts in options.items() %}
             <label>
-                {{ key|title }}<select name="{{ key }}">
+                {{ {'fault':'Incident', 'case_set':'Set'}.get(key, key|title) }}<select name="{{ key }}">
                 <option value="">All</option>
                 {% for option in opts %}
                     <option value="{{ option }}"
@@ -44,7 +44,7 @@
             {% for suite in suites %}
                 <p>
                     <a href="/suites/{{ suite.id }}">{{ suite.name }}</a>
-                    <small>{{ suite.location }}</small>
+                    <small>{{ suite.batch.get('suite_set', 'legacy') }} · {{ suite.batch.get('systems', ['multi'])|join(' / ') }}</small>
                 </p>
             {% endfor %}
         </div>

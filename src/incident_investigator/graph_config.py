@@ -3,7 +3,7 @@
 from argparse import ArgumentParser
 from typing import Literal
 
-GraphVariant = Literal["staged", "single"]
+GraphVariant = Literal["staged"]
 DEFAULT_GRAPH: GraphVariant = "staged"
 GRAPH_HELP = "staged: stage nodes and conditional edges (the only supported workflow)"
 
@@ -21,3 +21,8 @@ def recorded_graph(value: str | None) -> str:
     if value is None:
         return "hub"  # Runs predating graph selection used the hub implementation.
     return {"current": "hub", "explicit": "staged"}.get(value, value)
+
+
+def recorded_system(value: str | None, graph: str | None = None) -> str:
+    """Retain the system label of older baseline artifacts with a graph alias."""
+    return value if value in {"multi", "single"} else "single" if graph == "single" else "multi"

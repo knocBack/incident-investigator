@@ -46,17 +46,24 @@ class RunRequest(BaseModel):
     model_id: str = Field(default="", max_length=200)
     graph: str = DEFAULT_GRAPH
     system: Literal["multi", "single", "both"] = "multi"
+    case_set: Literal["primary", "variants", "all"] = "primary"
     limits_profile: str = "demo"
+    call_seconds: float | None = Field(default=None, gt=0, le=600, allow_inf_nan=False)
+    wall_seconds: float | None = Field(default=None, gt=0, le=3600, allow_inf_nan=False)
+    max_input_tokens: int = Field(default=64000, ge=1, le=2_000_000)
     repeats: int = Field(default=1, ge=1, le=20)
     concurrency: int = Field(default=2, ge=1, le=8)
     budget_usd: str = "0"
+    run_budget_usd: str | None = None
     confirm_paid: bool = False
     run: str | None = None
     trace: bool = False
 
-    @field_validator("budget_usd")
+    @field_validator("budget_usd", "run_budget_usd")
     @classmethod
     def budget(cls, value):
+        if value is None:
+            return None
         from decimal import InvalidOperation
 
         from incident_investigator.grading.budget import amount
@@ -94,13 +101,19 @@ def build_command(
                 raise ValueError("grading requires one known expectation")
             argv += ["--fault", request.faults[0]]
         return argv, output
-    valid = {f["id"] for f in repo.catalog.faults() if f["injectable"] and f["evaluable"]}
+    valid = {
+        f["id"]
+        for f in repo.catalog.faults()
+        if f["injectable"]
+        and f["evaluable"]
+        and (request.case_set == "all" or f.get("case_set", "primary") == request.case_set)
+    }
     if (
-        not request.faults
+        (not request.faults and request.command == "demo")
         or set(request.faults) - valid
         or len(set(request.faults)) != len(request.faults)
     ):
-        raise ValueError("select distinct injectable evaluation faults")
+        raise ValueError("select distinct injectable cases within the selected set")
     if request.provider == "openrouter":
         if validate_launch and not request.confirm_paid:
             raise ValueError("explicit paid-run confirmation required")
@@ -119,9 +132,9 @@ def build_command(
         output = root / "suites" / job_id
         argv += [
             "--set",
-            "all",
+            request.case_set,
             "--faults",
-            ",".join(request.faults),
+            ",".join(request.faults) if request.faults else "all",
             "--models",
             request.model_id if request.provider == "openrouter" else "scripted",
             "--repeats",
@@ -142,12 +155,19 @@ def build_command(
     if request.command == "demo" and request.system == "both":
         raise ValueError("use eval-suite to compare both systems")
     argv += ["--graph", request.graph, "--system", request.system]
+    for name in ("call_seconds", "wall_seconds"):
+        if getattr(request, name) is not None:
+            argv += ["--" + name.replace("_", "-"), str(getattr(request, name))]
+    if request.command == "eval-suite" and request.run_budget_usd is not None:
+        argv += ["--run-budget-usd", request.run_budget_usd]
+    if request.command == "eval-suite":
+        argv += ["--max-input-tokens", str(request.max_input_tokens)]
     if request.trace:
         argv += ["--trace", "phoenix"]
     if request.provider == "scripted":
-        replay = Path(__file__).with_name("scripted-demo.json")
+        replay = Path(__file__).with_name("scripted-paired.json")
         if not replay.is_file():
-            replay = Path(__file__).resolve().parents[2] / "tests" / "scripted-demo.json"
+            replay = Path(__file__).resolve().parents[2] / "tests" / "scripted-paired.json"
         if not replay.is_file():
             raise ValueError("the scripted replay is missing; reinstall the package")
         argv += ["--script", str(replay)]
@@ -188,10 +208,23 @@ class Jobs:
     def get(self, ident):
         metadata = self.repo.artifacts.json(f"jobs/{ident}/job.json")
         if metadata:
+            self.repo.runs.refresh()
             metadata["output"] = (
                 self.repo.artifacts.read(f"jobs/{ident}/output.log") or b""
             ).decode(errors="replace")
             metadata["runs"] = [r for r in self.repo.runs.runs() if r.get("launch_id") == ident]
+            from incident_investigator.telemetry.tracing import local_url
+
+            for run in metadata["runs"]:
+                try:
+                    run["phoenix_url"] = (
+                        local_url(run["phoenix_url"]) if run.get("phoenix_url") else None
+                    )
+                except (ValueError, TypeError):
+                    run["phoenix_url"] = None
+            metadata["suites"] = [
+                s for s in self.repo.runs.suites() if s["batch"].get("launch_id") == ident
+            ]
             if metadata["status"] == "running" and ident not in self.tasks:
                 metadata["status"] = "interrupted"
         return metadata

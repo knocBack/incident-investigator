@@ -3,47 +3,43 @@
 {% block content %}
     <span class="eyebrow">Exploratory · no acceptance threshold</span>
     <h1>{{ suite.name }}</h1>
-    {{ m.stats(stats) }}
+    <p class="subtitle">Set {{ suite.batch.get('suite_set', 'legacy') }} · Systems {{ suite.batch.get('systems', ['multi'])|join(' / ') }} · staged workflow</p>
+    <p class="page-note">{{ stats.runs }} observed attempts · total cost USD {{ m.measured(stats.cost, stats.known_cost, 6) }}.</p>
+    <p class="caption">Unknown usage stays unknown; known subtotals are lower bounds.</p>
     <form class="filters">
-        <label>
-            k<input type="number" min="1" max="100" name="k" value="{{ k }}">
-        </label>
+        <label>k<input type="number" min="1" max="100" name="k" value="{{ k }}"></label>
         <button class="button">Update</button>
+        <a class="button" href="/suites/{{ suite.id }}?k={{ k }}">Refresh results</a>
     </form>
-    <div class="card flush">
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Incident / system / model / graph</th>
-                        <th>n / correct</th>
-                        <th>pass@1</th>
-                        <th>pass@k</th>
-                        <th>pass^k</th>
-                        <th>Effective k</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in metrics %}
-                        <tr>
-                            <td>
-                                {{ row.fault }}<small>{{ row.system }} · {{ row.model }} · {{ row.graph }}</small>
-                            </td>
-                            <td>{{ row.n }} / {{ row.correct }}</td>
-                            <td>{{ '%.3f'|format(row.pass1) }}</td>
-                            <td>{{ '%.3f'|format(row.passk) }}</td>
-                            <td>{{ '%.3f'|format(row.powerk) }}</td>
-                            <td>{{ row.k }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <p class="page-note">k is clamped to observed attempts per fault/model/graph. Failures and missing reports remain in the denominator. Requested repeats may differ from observed attempts; inspect batch settings.</p>
-    <details>
-        <summary>Recorded batch settings</summary>
-        <pre>{{ suite.batch|pretty }}</pre>
-    </details>
+    <h2>Primary accuracy</h2>
+    <p class="caption">Ten incident cases. Reliability variants are excluded from primary accuracy.</p>
+    <div class="card flush"><div class="table-wrap"><table>
+        <thead><tr><th>Incident / system / model</th><th>Verdicts</th><th>Correct / n</th><th>pass@1</th><th>pass@k / pass^k</th><th>Effective k</th></tr></thead>
+        <tbody>{% for row in metrics if row.case_set == 'primary' %}
+            <tr><td>{{ row.fault }}<small>{{ row.system }} · {{ row.model }}</small></td><td>{{ row.verdicts|pretty }}{% if row.provisional %}<small>Provisional</small>{% endif %}</td><td>{{ row.correct }} / {{ row.n }}</td><td>{{ '%.3f'|format(row.pass1) }}</td><td>{{ '%.3f'|format(row.passk) }} / {{ '%.3f'|format(row.powerk) }}</td><td>{{ row.k }}</td></tr>
+        {% else %}<tr><td colspan="6">No primary attempts in this suite.</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+    <h2>Reliability</h2>
+    <p class="caption">R1 requires an exercised fault and a bounded successful retrieval retry. Diagnostic correctness is separate. R2 measures justified uncertainty.</p>
+    <div class="card flush"><div class="table-wrap"><table>
+        <thead><tr><th>Variant / system</th><th>Diagnostic verdicts</th><th>R1 exercised / recovered</th><th>R1 not exercised</th><th>R1 recovered + correct</th><th>R2 justified</th></tr></thead>
+        <tbody>{% for row in metrics if row.case_set == 'variants' %}
+            {% set r = row.reliability %}
+            <tr><td>{{ row.fault }}<small>{{ row.system }} · {{ row.model }}</small></td><td>{{ row.verdicts|pretty }}</td><td>{{ r.recovery.fault_exercised }} / {{ r.recovery.recovered }}</td><td>{{ r.recovery.not_exercised }}</td><td>{{ r.recovery.success }} / {{ r.recovery.runs }}</td><td>{{ r.uncertainty.justified }} / {{ r.uncertainty.runs }}</td></tr>
+        {% else %}<tr><td colspan="6">No reliability attempts in this suite.</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+    <h2>Multi vs single, per incident</h2>
+    <p class="caption">Resources are totals over retained repeats. k is clamped to observed attempts. Failed and missing reports remain in the denominator. Compare recorded limits and snapshots before interpreting differences.</p>
+    {% for pair in paired %}
+        <section class="card">
+            <h3>{{ pair.fault }} <small>{{ pair.case_set }} · {{ pair.model }}</small></h3>
+            <div class="grid2">
+                <div><span class="eyebrow">Multi</span>{{ m.result_card(pair.get('multi')) }}</div>
+                <div><span class="eyebrow">Single</span>{{ m.result_card(pair.get('single')) }}</div>
+            </div>
+        </section>
+    {% endfor %}
+    <details><summary>Recorded batch settings</summary><pre>{{ suite.batch|pretty }}</pre></details>
+    <h2>Retained attempts</h2>
     <div class="card flush">{{ m.runs(runs) }}</div>
 {% endblock %}
