@@ -8,7 +8,7 @@ Investigators read a fixed snapshot through typed tools. A cutoff excludes recor
 
 ## Six roles with a bounded review loop
 
-Separate collection, reasoning, critique and reporting. Two specialists gather evidence concurrently; the next stage waits for their outcomes. This simplifies dependencies and preserves independent findings, at the cost of waiting for the slower worker and making more model calls. The upcoming matched single-agent comparison must measure whether that tradeoff pays off.
+Separate collection, reasoning, critique and reporting. Two specialists gather evidence concurrently, as independent subtasks run in parallel [1]. The critic follows the evaluator-optimizer pattern, where one model call evaluates another's output [1]. The next stage waits for both specialists. This simplifies dependencies and preserves independent findings, at the cost of waiting for the slower worker and making more model calls. Synchronous waits and higher token use are known costs of multi-agent systems [2]. Agentic systems trade latency and cost for task performance [1], so the upcoming matched single-agent comparison must measure whether that tradeoff pays off.
 
 ## Staged is the only workflow
 
@@ -45,3 +45,8 @@ Use source functions behind a typed registry and artifact/run/catalog repositori
 ## A local console with an optional Phoenix stack
 
 Use server-rendered pages and small JavaScript files, without a frontend build or account. Launch one bounded subprocess job at a time, with explicit confirmation for provider calls. Every run writes its local trace. Export to the Phoenix stack is opt-in and loopback-only. Local artifacts, including the trace, stay complete when the Phoenix stack is off or unavailable.
+
+## References
+
+1. Anthropic, 2024. [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents). Describes parallel sectioning into independent subtasks, the evaluator-optimizer workflow, and the latency and cost tradeoff of agentic systems.
+2. Anthropic, 2025. [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system). Reports that multi-agent systems use about 15 times more tokens than chats, and that synchronous execution can block the system while it waits for one subagent.

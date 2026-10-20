@@ -38,6 +38,8 @@ For each fault/model/recorded-workflow group, let `n` be the observed attempts, 
 | pass@k | `1 - C(n-c, k) / C(n, k)` | Estimated chance of at least one success in a sample of k observed attempts |
 | pass^k | `C(c, k) / C(n, k)` | Estimated chance that every attempt in that sample succeeds |
 
+The pass@k estimator comes from the Codex paper [1]. pass^k and its estimator come from tau-bench [2]. Anthropic's agent-eval guide [3] explains when each matters: pass@k when one success is enough, pass^k when users expect consistent behavior.
+
 `C(a,b)` counts combinations and is zero when `b > a`. These finite-sample estimators sample without replacement; pass^k is not computed as `(c/n)^k`. With one attempt, all three metrics are identical. Requested repeats and observed attempts can differ, so inspect batch settings and skipped entries. Missing reports and execution failures remain in observed denominators. Unstarted/skipped attempts are recorded separately and are not fabricated as completed runs.
 
 ## Other measurements
@@ -69,3 +71,9 @@ The suite budget guard reserves conservatively before dispatch and settles known
 ## Limits of the evidence
 
 Synthetic faults are authored and development-exposed. The automatic grader uses keywords and record matchers. Small samples, changing configurations and reruns do not establish production generalization, calibrated confidence or multi-agent superiority. Publish conditions and all attempts alongside future comparisons. The [console guide](ui.md) explains how to inspect the underlying reports, grades and evidence.
+
+## References
+
+1. Chen et al., 2021. [Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374). Section 2.1 defines the unbiased pass@k estimator `1 - C(n-c, k) / C(n, k)`.
+2. Yao et al., 2024. [tau-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains](https://arxiv.org/abs/2406.12045). Defines pass^k as the chance that all k trials succeed, estimated by `C(c, k) / C(n, k)`.
+3. Anthropic, 2026. [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents). Explains pass@k and pass^k and notes they are identical at k = 1.
