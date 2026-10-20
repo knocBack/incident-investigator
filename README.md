@@ -9,7 +9,7 @@
 ![LangGraph](https://img.shields.io/badge/built%20with-LangGraph-1c3c3c)
 ![Status](https://img.shields.io/badge/status-MVP-yellow)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Console](#console) · [Status](#status-and-results) · [Docs](#documentation)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Console](#console) · [Status](#status-and-results) · [What's next](#whats-next) · [Docs](#documentation)
 
 </div>
 
@@ -101,6 +101,15 @@ An [early exploratory re-grade](evals/results/exploratory-2026-10-19/README.md) 
 
 **Multi-agent vs single-agent: results pending.** No comparison numbers exist yet. [Evaluation](docs/evaluation.md) describes the method.
 
+## What's next
+
+- [x] **Never lose a run:** resume an investigation after a crash
+- [ ] **One agent vs a team:** a public scoreboard on 10 incidents (in progress)
+- [ ] **Start from a real alert:** an alerting webhook kicks off an investigation automatically
+- [ ] **First real data source:** read live metrics from Prometheus
+- [ ] **Answer in chat:** post a short summary to Slack, with a link to the full report
+- [ ] **Beat the AI:** a random hidden fault, and you race the agents to name the cause
+
 ## Documentation
 
 | Doc | What it covers |
@@ -118,3 +127,13 @@ An [early exploratory re-grade](evals/results/exploratory-2026-10-19/README.md) 
 | [Runtime](docs/lld.md), [roles](docs/lld-03-roles.md), [tools](docs/tool-contracts.md) | Detailed contracts |
 
 Contributors: development checks are in [usage](docs/usage.md#development-checks).
+
+## References
+
+- [Chen et al., 2021, Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374): the pass@k metric and its unbiased estimator
+- [Yao et al., 2024, tau-bench](https://arxiv.org/abs/2406.12045): the pass^k reliability metric and its estimator
+- [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents): when to use pass@k versus pass^k
+- [Anthropic, Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): parallel specialists, the critic loop and the latency and cost tradeoff
+- [Anthropic, How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): the token and waiting costs of multi-agent systems
+
+See [evaluation](docs/evaluation.md#references) and [decisions](docs/decisions.md#references) for the exact claims each one supports.
