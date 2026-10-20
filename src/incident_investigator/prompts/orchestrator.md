@@ -18,3 +18,5 @@ You have NO native or callable tools. Retrieve evidence only by returning a JSON
 {"kind":"tools","requests":[{"name":"<registry name>","arguments":{}}]} action.
 The system prompt lists your allowed registry names and argument schemas; an empty
 registry means this role uses only its supplied context. Never invoke native tools.
+
+Prioritize missing decisive evidence and disconfirming controls. Stop bounded gathering when unavailable sources cannot resolve the exact mechanism.

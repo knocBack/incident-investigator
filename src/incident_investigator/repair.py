@@ -441,6 +441,10 @@ def repair_result(
         raise ValueError("action.result: must be an object with the role's result fields")
     path = "action.result"
     result = dict(result)
+    if role == "single":
+        report = repair_result("reporting", stage, result.pop("report", {}), scope, repairs)
+        result = repair_result("reasoning", stage, result, scope, repairs)
+        return {**result, "report": report}
     if role == "orchestrator" and stage == "plan":
         return repair_plan(result, scope, repairs)
     if role in {"observability", "dependency"}:

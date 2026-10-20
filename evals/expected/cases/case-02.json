@@ -1,0 +1,88 @@
+{
+  "version": "cases.v1",
+  "family": "bad_configuration",
+  "culprit_service": "checkout",
+  "mechanism_keywords": [
+    "deadline|timeout",
+    "50|short|reduc"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "checkout",
+      "predicates": {
+        "body": {
+          "regex": "caller deadline"
+        }
+      }
+    },
+    {
+      "source": "metrics",
+      "service": "inventory",
+      "predicates": {
+        "name": {
+          "eq": "request_latency"
+        },
+        "value": {
+          "gte": 80
+        }
+      }
+    },
+    {
+      "source": "changes",
+      "service": "checkout",
+      "predicates": {
+        "changes": {
+          "contains": {
+            "key": "inventory_deadline_ms"
+          }
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "checkout",
+        "predicates": {
+          "body": {
+            "regex": "caller deadline"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "metrics",
+        "service": "inventory",
+        "predicates": {
+          "name": {
+            "eq": "request_latency"
+          },
+          "value": {
+            "gte": 80
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "changes",
+        "service": "checkout",
+        "predicates": {
+          "changes": {
+            "contains": {
+              "key": "inventory_deadline_ms"
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "inventory slowdown",
+    "database contention"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review."
+}

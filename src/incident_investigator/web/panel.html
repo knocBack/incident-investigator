@@ -3,6 +3,7 @@
     <span class="eyebrow">Real CLI commands</span>
     <h1>Run a selective evaluation</h1>
     <p class="subtitle">Discover faults, review the exact command, and stream its output into retained artifacts.</p>
+    <div class="callout info"><strong>How it works</strong><p>Choose cases and a model → Launch → Watch this job → Open the comparison or a run report → Phoenix · live detailed view for agent traces (enable capture below).</p></div>
     {% if not enabled %}
         <div class="callout warning">Process launching is unavailable for this backend. Viewing and human reviews still work.</div>
     {% endif %}
@@ -19,12 +20,22 @@
                                 {% if request.query_params.get('grade') %}selected{% endif %}>eval · grade a saved run</option>
                         </select>
                     </label>
+                    <label class="field">
+                        Set<select name="case_set" id="case-set">
+                            <option value="primary">primary · ten incidents</option>
+                            <option value="variants">variants · recovery and uncertainty</option>
+                            <option value="all">all · primary and variants</option>
+                        </select>
+                    </label>
+                    <p class="caption">Choose cases below, or leave all unchecked to run the entire selected set.</p>
+                    <p class="caption">Reliability recovery and uncertainty results appear for the variants or all sets.</p>
                     <div class="fault-grid">
                         {% for fault in faults %}
                             <label class="fault-option">
                                 <input type="checkbox"
                                        name="faults"
                                        value="{{ fault.id }}"
+                                       data-set="{{ fault.case_set }}"
                                        {% if not fault.injectable or not fault.evaluable %}disabled{% endif %}
                                        {% if loop.first and not request.query_params.get('grade') %}checked{% endif %}>
                                 <span>{{ fault.id }}<small>{{ fault.version }} · {{ 'injectable' if fault.injectable else 'evaluation only' }}</small>
@@ -48,26 +59,28 @@
                     <div class="fields">
                         <label class="field">
                             Provider<select name="provider">
-                            <option>scripted</option>
-                            <option>openrouter</option>
+                            <option value="scripted">scripted · canned console replay</option>
+                            <option value="openrouter">openrouter · model investigation</option>
                             </select>
                         </label>
                         <label class="field">
-                            OpenRouter model id<input name="model_id" placeholder="organization/model">
+                            OpenRouter model id<input name="model_id" placeholder="organization/model" value="deepseek/deepseek-v3.2">
                         </label>
                         <label class="field">
-                            Graph<select name="graph">
-                            {% for graph in graphs %}
-                                <option>{{ graph }}</option>
-                            {% endfor %}
+                            System<select name="system">
+                                <option value="multi">multi</option>
+                                <option value="single">single</option>
+                                <option value="both">both (eval-suite)</option>
                             </select>
+                            <small>Multi: six collaborating roles. Single: one investigator. Both: compare them on the same snapshots and limits.</small>
                         </label>
                         <label class="field">
                             Limits profile<select name="limits_profile">
-                            {% for profile in profiles %}
-                                <option>{{ profile }}</option>
+                            {% for profile, limits in profiles.items() %}
+                                <option data-call-seconds="{{ limits.call_seconds }}" data-wall-seconds="{{ limits.wall_seconds }}">{{ profile }}</option>
                             {% endfor %}
                             </select>
+                            <small>demo uses short timeouts for local replays; demo-live gives live providers more time. Overrides below apply to either profile.</small>
                         </label>
                         <label class="field">
                             Repeats<input name="repeats" type="number" min="1" max="20" value="1">
@@ -76,34 +89,55 @@
                             Concurrency<input name="concurrency" type="number" min="1" max="8" value="2">
                         </label>
                         <label class="field">
-                            Budget cap USD<input name="budget_usd"
+                            Suite cap USD<input name="budget_usd" id="budget_usd" aria-describedby="reservation-estimate run-error"
        type="number"
        min="0"
        max="100"
        step=".01"
        value="0">
+                            <small>Total allowance shared by all attempts in this suite. 0 means no paid calls allowed.</small>
+                        </label>
+                        <label class="field">
+                            Per-run cap USD<input name="run_budget_usd" id="run_budget_usd" aria-describedby="reservation-estimate run-error" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
+                            <small>Maximum for each attempt within the suite allowance. Blank inherits the suite cap; 0 allows no paid calls.</small>
+                        </label>
+                        <label class="field">
+                            Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="{{ profiles['demo'].call_seconds }} seconds (demo)">
+                        </label>
+                        <label class="field">
+                            Run wall limit (seconds)<input name="wall_seconds" type="number" min=".001" max="3600" step="any" placeholder="{{ profiles['demo'].wall_seconds }} seconds (demo)">
+                        </label>
+                        <label class="field">
+                            Max input tokens<input name="max_input_tokens" type="number" min="1" max="2000000" value="64000">
                         </label>
                     </div>
+                    <p class="caption" id="reservation-estimate" role="status">Scripted replay makes no model calls.</p>
+                    <p class="callout warning" id="suite-budget-warning" role="status" hidden></p>
+                    <p class="callout info" id="replay-note">Scripted is a canned pipeline replay for testing the console. It uses fixed responses; inconclusive is expected.</p>
                     <label class="fault-option">
-                        <input name="trace" type="checkbox">Capture in local Phoenix (optional extra required)
+                        <input name="trace" type="checkbox" {% if phoenix_available %}checked{% endif %}>Capture in local Phoenix (optional extra required)
                     </label>
+                    <p class="caption">{% if phoenix_available %}Local Phoenix is reachable; capture is enabled by default.{% else %}Capture needs a reachable local Phoenix and the phoenix extra installed.{% endif %}</p>
                     <label class="confirm">
-                        <input name="confirm_paid" type="checkbox">
+                        <input name="confirm_paid" id="confirm_paid" data-label="I explicitly authorize OpenRouter calls" type="checkbox">
                         <span>I explicitly authorize OpenRouter calls under this budget cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
                     </label>
-                    <p class="caption">Scripted is a deterministic coordination replay, not a diagnostic fallback. Without an installed replay file, an empty script fails boundedly and retains artifacts.</p>
                 </div>
             </div>
             <div>
                 <div class="card">
                     <p class="step-label">03 / Review & launch</p>
                     <div class="command" id="command-preview">Choose settings to preview the command.</div>
+                    <p class="caption">Command preview updates automatically as settings change.</p>
+                    <p class="caption" id="job-limit" role="status">Checking settings to calculate the job limit.</p>
                     <p class="error-text" id="run-error" role="status"></p>
+                    <div class="actions" id="run-error-fields"></div>
                     <div class="actions">
-                        <button class="button" type="button" id="preview-command">Update command</button>
-                        <button class="button primary" {% if not enabled %}disabled{% endif %}>Launch</button>
+                        <button class="button" type="button" id="retry-preview" hidden>Retry settings check</button>
+                        <button class="button primary" id="launch-job" aria-describedby="launch-status" disabled>Updating command…</button>
+                        <span class="caption" id="launch-status" role="status">Updating command…</span>
                     </div>
-                    <p class="caption">One active console job at a time. Selected concurrency applies to its batch. Jobs retain logs and have a one-hour console timeout; individual runs retain finite runtime limits.</p>
+                    <p class="caption">One active console job at a time. The job limit uses selected attempts, concurrency and per-run wall limits plus a margin. Timeout or cancellation allows graceful finalization before a forced stop.</p>
                 </div>
             </div>
         </div>

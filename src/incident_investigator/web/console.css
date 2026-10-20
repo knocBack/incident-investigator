@@ -302,12 +302,19 @@ select {
   overflow: auto;
   max-width: 100%;
 }
+.system-summary th,
+.system-summary td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 table {
   border-collapse: collapse;
   width: 100%;
   font-size: 12px;
 }
 th {
+  overflow-wrap: normal;
+  word-break: normal;
   text-align: left;
   font-size: 10px;
   text-transform: uppercase;
@@ -409,6 +416,10 @@ th.number {
   background: #fff9e9;
   color: #805c19;
 }
+.field input[aria-invalid="true"] {
+  border: 2px solid #a53a32;
+  background: #fff5f3;
+}
 .report h1 {
   display: none;
 }
@@ -426,6 +437,13 @@ th.number {
 .report li {
   font-size: 13px;
   line-height: 1.75;
+}
+.report {
+  overflow-x: auto;
+}
+.report td {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .report table {
   font-size: 10px;
@@ -503,6 +521,10 @@ details pre {
 }
 .error-text {
   color: var(--red);
+}
+.terminal a {
+  color: #9bdccb;
+  text-decoration: underline;
 }
 .terminal {
   background: #142331;
@@ -743,3 +765,7 @@ input[type="checkbox"] {
 
 .sidebar .brand { display: flex; }
 @media (max-width:760px) { .sidebar nav { display:flex; flex-wrap:wrap; gap:4px; } }
+
+.system-summary .outcome-column {
+  min-width: 280px;
+}

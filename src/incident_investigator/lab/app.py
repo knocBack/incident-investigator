@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from incident_investigator.lab.scenarios import NEW_FAULTS, activate, step
 from incident_investigator.telemetry.models import SourceObservation
 
 FAULTS = (
@@ -59,6 +60,7 @@ def create_app(
     clock: Callable[[], datetime] | None = None,
     seed: int = 1,
     telemetry_sink: TelemetrySink | None = None,
+    scenario: str | None = None,
 ) -> FastAPI:
     """Create an in-process three-service lab with injectable time and telemetry."""
     current_time = clock or (lambda: datetime.now(UTC))
@@ -67,6 +69,7 @@ def create_app(
     app = FastAPI(title="Incident Investigator Lab")
     app.state.faults: set[str] = set()
     app.state.sequence = 0
+    app.state.fault_requests = 0
     app.state.sink = sink
     database = sqlite3.connect(":memory:", check_same_thread=False)
     database.execute("CREATE TABLE inventory (sku TEXT PRIMARY KEY, available INTEGER NOT NULL)")
@@ -96,19 +99,24 @@ def create_app(
     def log(
         service: str, severity: str, body: str, request_id: str | None, **attributes: Any
     ) -> None:
+        version = attributes.pop("version", None)
+        transaction_id = attributes.pop("transaction_id", None)
         emit(
             "logs",
             {
                 "service": service,
                 "severity": severity,
                 "body": body,
-                "version": "v2"
-                if "deployment_regression" in app.state.faults and service == "inventory"
-                else "v1",
+                "version": version
+                or (
+                    "v2"
+                    if "deployment_regression" in app.state.faults and service == "inventory"
+                    else "v1"
+                ),
                 "operation": "reserve" if service != "database" else "query",
                 "request_id": request_id,
                 "trace_id": request_id,
-                "transaction_id": None,
+                "transaction_id": transaction_id,
                 "attributes": attributes,
             },
         )
@@ -117,6 +125,7 @@ def create_app(
         service: str, name: str, value: float, unit: str, aggregation: str, **attributes: Any
     ) -> None:
         point = now()
+        version = attributes.pop("version", None)
         emit(
             "metrics",
             {
@@ -127,9 +136,12 @@ def create_app(
                 "aggregation": aggregation,
                 "window_start": (point - timedelta(seconds=10)).isoformat(),
                 "window_end": point.isoformat(),
-                "version": "v2"
-                if "deployment_regression" in app.state.faults and service == "inventory"
-                else "v1",
+                "version": version
+                or (
+                    "v2"
+                    if "deployment_regression" in app.state.faults and service == "inventory"
+                    else "v1"
+                ),
                 "operation": "reserve",
                 "sample_count": 1,
                 "attributes": attributes,
@@ -156,6 +168,13 @@ def create_app(
 
     def inventory_reserve(sku: str, request_id: str) -> tuple[bool, int, float]:
         fault = app.state.faults
+        selected = fault & NEW_FAULTS
+        if selected:
+            app.state.fault_requests += 1
+            status, latency = step(
+                sorted(selected)[0], app.state.fault_requests, request_id, log, metric
+            )
+            return status == 200, status, latency
         if "resource_exhaustion" in fault:
             log(
                 "inventory",
@@ -217,7 +236,7 @@ def create_app(
             query_latency_ms=db_ms,
         )
         log("inventory", "INFO", "inventory reserved", request_id)
-        latency = db_ms + rng.random()
+        latency = db_ms + (98 if scenario == "caller_deadline" else 0) + rng.random()
         metrics("inventory", latency, False, db_ms)
         return True, 200, latency
 
@@ -262,9 +281,12 @@ def create_app(
 
     @app.post("/admin/faults")
     def set_fault(request: FaultRequest) -> dict[str, list[str]]:
-        if request.family not in FAULTS:
+        if request.family not in set(FAULTS) | NEW_FAULTS:
             raise HTTPException(status_code=422, detail="unknown fault family")
         app.state.faults.add(request.family)
+        app.state.fault_requests = 0
+        if request.family in NEW_FAULTS:
+            activate(request.family, emit)
         if request.family == "deployment_regression":
             emit(
                 "changes",

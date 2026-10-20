@@ -3,28 +3,44 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from incident_investigator.console_jobs import Jobs, RunRequest, display_command, graph_variants
+from incident_investigator.console_jobs import (
+    Jobs,
+    RunRequest,
+    display_command,
+    graph_variants,
+    job_plan,
+    suite_budget_warning,
+)
 from incident_investigator.console_views import (
+    check_reasons,
+    grade_summary,
     markdown,
     observations,
+    paired_metrics,
+    present_run,
     pretty,
     suite_metrics,
+    suite_title,
     summary,
+    system_metrics,
 )
 from incident_investigator.contracts import PROFILES
 from incident_investigator.storage import Repositories, repositories
@@ -32,10 +48,35 @@ from incident_investigator.storage import Repositories, repositories
 DIMENSIONS = ("Diagnosis", "Support", "Contradictions", "Uncertainty", "Actions")
 
 
+async def phoenix_available():
+    """Probe only the configured loopback collector, with no credentials or redirects."""
+    import httpx
+
+    from incident_investigator.telemetry.tracing import local_url
+
+    try:
+        from importlib.util import find_spec
+
+        if find_spec("openinference.instrumentation.langchain") is None:
+            return False
+        url = local_url(os.environ.get("II_PHOENIX_URL", "http://127.0.0.1:6006"))
+        async with httpx.AsyncClient(
+            timeout=0.5, trust_env=False, follow_redirects=False
+        ) as client:
+            return (await client.get(url)).is_success
+    except (ImportError, ValueError, httpx.HTTPError):
+        return False
+
+
 class RubricEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     score: str = Field(pattern=r"^(pass|partial|fail|unreviewed)$")
     reason: str = Field(default="", max_length=10000)
+
+
+class CancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal[True]
 
 
 class Rubric(BaseModel):
@@ -71,7 +112,12 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             return None
 
     templates.env.filters.update(pretty=pretty, phoenix_url=safe_phoenix_url)
-    templates.env.globals.update(dimensions=DIMENSIONS)
+    templates.env.globals.update(
+        dimensions=DIMENSIONS,
+        asset_version=hashlib.sha256(
+            (assets / "console.js").read_bytes() + (assets / "console.css").read_bytes()
+        ).hexdigest()[:12],
+    )
     app.mount("/static", StaticFiles(directory=str(assets)), name="static")
 
     @app.middleware("http")
@@ -100,6 +146,19 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
     def refresh():
         repo.runs.refresh()
 
+    def presented(rows):
+        suites = {s["id"]: s for s in repo.runs.suites()}
+        result = []
+        for row in rows:
+            selected = suites.get(row.get("suite"), {})
+            value = present_run(row, repo.artifacts, selected.get("prefix"))
+            if selected:
+                value["suite_name"] = suite_title(
+                    selected, repo.runs.runs({"suite": selected["id"]})
+                )
+            result.append(value)
+        return result
+
     def get_run(ident):
         run = repo.runs.get(ident)
         if run is None:
@@ -114,9 +173,9 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         refresh()
         filters = {
             k: request.query_params.get(k, "")
-            for k in ("fault", "model", "graph", "verdict", "suite")
+            for k in ("fault", "model", "system", "case_set", "verdict", "suite")
         }
-        rows = repo.runs.runs(filters, request.query_params.get("sort", "created"))
+        rows = presented(repo.runs.runs(filters, request.query_params.get("sort", "created")))
         options = {k: sorted({r[k] for r in repo.runs.runs() if r[k]}) for k in filters}
         options["suite"] = sorted(s["id"] for s in repo.runs.suites())
         return render(
@@ -125,14 +184,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             runs=rows,
             filters=filters,
             options=options,
-            suites=repo.runs.suites(),
-            stats=summary(repo.runs.runs()),
+            suites=[
+                {**s, "title": suite_title(s, repo.runs.runs({"suite": s["id"]}))}
+                for s in repo.runs.suites()
+            ],
+            stats=summary(presented(repo.runs.runs())),
         )
 
     @app.get("/runs/{ident}", response_class=HTMLResponse)
     def run_detail(request: Request, ident: str, tab: str = "report"):
         refresh()
-        run = get_run(ident)
+        run = presented([get_run(ident)])[0]
         if tab not in {"report", "grade", "rubric", "evidence"}:
             raise HTTPException(404, "Unknown tab")
         result = artifact(run, "result.json")
@@ -161,6 +223,16 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             ]
         review = repo.artifacts.json(f"reviews/{ident}/human-rubric.json")
         trace = artifact(run, "phoenix.json")
+        selected_suite = next((s for s in repo.runs.suites() if s["id"] == run["suite"]), {})
+        profile_name = selected_suite.get("batch", {}).get("limits_profile") or repo.artifacts.json(
+            f"jobs/{run.get('launch_id')}/job.json"
+        ).get("limits_profile")
+        if not profile_name:
+            saved_limits = state.get("limits") or artifact(run, "run.json").get("limits")
+            profile_name = next(
+                (name for name, limits in PROFILES.items() if limits.model_dump() == saved_limits),
+                "unavailable",
+            )
         if trace.get("url"):
             from incident_investigator.telemetry.tracing import local_url
 
@@ -177,12 +249,25 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             report=markdown(text, ident, refs),
             grade=run["grade"],
             expected=repo.catalog.expected(run["fault"]),
+            check_reasons=check_reasons(result, run["grade"]),
+            grade_summary=grade_summary(result, run["grade"]),
+            failure_explanation=run["failure_explanation"],
+            run_profile=profile_name,
             review=review,
             telemetry=observations(rows, request.query_params),
             frozen=frozen is not None,
             snapshot=artifact(run, "snapshot/manifest.json"),
             trace=trace,
         )
+
+    @app.get("/runs/{ident}/result.json")
+    def raw_result(ident: str):
+        refresh()
+        run = get_run(ident)
+        content = repo.artifacts.read(run["prefix"] + "/result.json")
+        if content is None:
+            raise HTTPException(404, "Result not retained yet")
+        return Response(content, media_type="application/json")
 
     @app.get("/runs/{ident}/evidence/{evidence_id}", response_class=HTMLResponse)
     def evidence(request: Request, ident: str, evidence_id: str):
@@ -214,34 +299,110 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         selected = next((s for s in repo.runs.suites() if s["id"] == ident), None)
         if selected is None:
             raise HTTPException(404, "Unknown suite")
-        rows = repo.runs.runs({"suite": ident})
+        rows = presented(repo.runs.runs({"suite": ident}))
+        metrics = suite_metrics(rows, k)
+        board = repo.artifacts.json(selected["prefix"] + "/leaderboard.json")
+        launch = repo.artifacts.json(f"jobs/{selected['batch'].get('launch_id')}/job.json")
+        provisional = (
+            not board
+            or launch.get("status") == "running"
+            or any(row["provisional"] for row in metrics)
+        )
+        for row in metrics:
+            row["provisional"] |= provisional
+        variants = {f["id"] for f in repo.catalog.faults() if f.get("case_set") == "variants"}
+        selected_cases = selected["batch"].get("faults", [r["fault"] for r in metrics])
+        selected_systems = (
+            selected["batch"].get("systems") or sorted({r["system"] for r in rows}) or ["multi"]
+        )
+        batch = selected["batch"]
+        planned = (
+            len(batch["faults"])
+            * len(batch["models"])
+            * batch.get("repeats", 1)
+            * len(selected_systems)
+            if batch.get("faults") and batch.get("models")
+            else None
+        )
+        skipped = board.get("skipped", batch.get("skipped", []))
+        cancelled = launch.get("status") == "cancelled" or any(
+            "cancelled before admission" in item.get("reason", "") for item in skipped
+        )
         return render(
             request,
             "suite.html",
             suite=selected,
+            suite_title=suite_title(selected, rows),
+            selected_systems=selected_systems,
             runs=rows,
             stats=summary(rows),
+            planned=planned,
+            cancelled=cancelled,
             k=k,
-            metrics=suite_metrics(rows, k),
+            metrics=metrics,
+            paired=paired_metrics(
+                metrics,
+                provisional=provisional,
+                skipped=[
+                    {**item, "case_set": "variants" if item.get("fault") in variants else "primary"}
+                    for item in skipped
+                ],
+                systems=selected_systems,
+            ),
+            systems=system_metrics(board, rows, k),
+            provisional=provisional,
+            primary_count=len(set(selected_cases) - variants),
+            has_leaderboard=repo.artifacts.read(selected["prefix"] + "/leaderboard.md") is not None,
         )
+
+    @app.get("/suites/{ident}/leaderboard.md")
+    def suite_leaderboard(ident: str):
+        refresh()
+        selected = next((s for s in repo.runs.suites() if s["id"] == ident), None)
+        content = repo.artifacts.read(selected["prefix"] + "/leaderboard.md") if selected else None
+        if content is None:
+            raise HTTPException(404, "Leaderboard not retained")
+        return Response(content, media_type="text/plain")
 
     @app.get("/compare", response_class=HTMLResponse)
     def compare(request: Request, left: str = "", right: str = "", kind: str = "runs"):
         refresh()
         if kind not in {"runs", "suites"}:
             raise HTTPException(422, "Compare runs or suites")
-        options = repo.runs.runs() if kind == "runs" else repo.runs.suites()
+        options = (
+            presented(repo.runs.runs())
+            if kind == "runs"
+            else [
+                {**s, "title": suite_title(s, repo.runs.runs({"suite": s["id"]}))}
+                for s in repo.runs.suites()
+            ]
+        )
         values = []
         for ident in (left, right):
             if kind == "runs":
-                values.append(repo.runs.get(ident))
+                values.append(next((r for r in options if r["id"] == ident), None))
             else:
                 selected = next((s for s in options if s["id"] == ident), None)
                 values.append(
-                    {**selected, **summary(repo.runs.runs({"suite": ident}))} if selected else None
+                    {**selected, **summary(presented(repo.runs.runs({"suite": ident})))}
+                    if selected
+                    else None
                 )
         fields = (
-            ("verdict", "status", "graph", "model", "calls", "events", "cost", "wall_seconds")
+            (
+                "verdict",
+                "status",
+                "system",
+                "case_set",
+                "graph",
+                "model",
+                "model_calls",
+                "tool_calls",
+                "input_tokens",
+                "output_tokens",
+                "cost",
+                "wall_seconds",
+            )
             if kind == "runs"
             else ("runs", "correct", "failures", "calls", "events", "cost", "wall_seconds")
         )
@@ -254,10 +415,11 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             left=left,
             right=right,
             fields=fields,
+            compare_ready=all(values),
         )
 
     @app.get("/run", response_class=HTMLResponse)
-    def panel(request: Request):
+    async def panel(request: Request):
         refresh()
         return render(
             request,
@@ -267,10 +429,11 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             graphs=graph_variants(),
             profiles=PROFILES,
             enabled=jobs is not None,
+            phoenix_available=await phoenix_available(),
         )
 
     @app.post("/api/preview")
-    def preview(body: RunRequest):
+    async def preview(body: RunRequest):
         if jobs is None:
             raise HTTPException(409, "Local process launcher unavailable for this storage backend")
         refresh()
@@ -278,7 +441,18 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             argv, _ = jobs.preview(body, "preview")
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"command": display_command(argv)}
+        validation = await jobs.preflight.check(body, repo)
+        return {
+            "command": display_command(argv),
+            "plan": job_plan(body, repo),
+            "budget_warning": ""
+            if validation.get("free_model")
+            else suite_budget_warning(body, job_plan(body, repo)),
+            "authorization_required": body.provider == "openrouter"
+            and body.command != "eval"
+            and not body.confirm_paid,
+            **validation,
+        }
 
     @app.post("/api/jobs")
     async def launch(body: RunRequest):
@@ -287,6 +461,11 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         refresh()
         ident = uuid4().hex
         try:
+            # Check caps again server-side; a stale preview cannot authorize a refused launch.
+            jobs.preview(body, "preview")
+            preflight = await jobs.preflight.check(body, repo)
+            if not preflight["launch_allowed"]:
+                raise ValueError(preflight["message"])
             jobs.start(body, ident)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -298,6 +477,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             raise HTTPException(404, "Unknown job")
         return render(request, "job.html", job=jobs.get(ident))
 
+    @app.post("/api/jobs/{ident}/cancel")
+    async def cancel_job(ident: str, body: CancelRequest):
+        if not jobs:
+            raise HTTPException(409, "Local process launcher unavailable for this storage backend")
+        try:
+            return jobs.cancel(ident)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown job") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.get("/api/jobs/{ident}/events")
     async def job_events(ident: str):
         if not jobs or not jobs.get(ident):
@@ -307,7 +497,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             while True:
                 record = jobs.get(ident)
                 yield "data: " + json.dumps(record) + "\n\n"
-                if record["status"] != "running":
+                if record["status"] not in {"running", "cancelling"}:
                     break
                 await asyncio.sleep(0.5)
 

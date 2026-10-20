@@ -15,14 +15,14 @@
                 <option value="">Select</option>
                 {% for option in options %}
                     <option value="{{ option.id }}"
-                            {% if (left if side == 'left' else right) == option.id %}selected{% endif %}>{{ option.get('fault',option.get('name')) }} · {{ option.get('graph', 'suite') }} · {{ option.id[:8] }}</option>
+                            {% if (left if side == 'left' else right) == option.id %}selected{% endif %}>{% if kind == 'runs' %}{{ option.fault }} · {{ option.model or 'unknown model' }} · {{ option.system }} · {{ option.case_set }} · {{ option.suite_name or 'standalone' }} · {{ option.created_at }} · {{ option.id[:8] }}{% else %}{{ option.title }} · {{ option.id[:8] }}{% endif %}</option>
                 {% endfor %}
                 </select>
             </label>
         {% endfor %}
         <button class="button">Compare</button>
     </form>
-    <div class="card">
+    {% if compare_ready %}<div class="card" id="comparison-table">
         <div class="compare-metric header">
             <span>Metric</span>
             <span>Left</span>
@@ -32,10 +32,11 @@
             <div class="compare-metric">
                 <span>{{ field }}</span>
                 {% for value in values %}
-                    <span>{{ m.value(value.get(field) if value else none) }}</span>
+                    <span>{% if field == 'cost' %}{{ m.cost(value) }}{% elif field in ['input_tokens', 'output_tokens'] %}{{ m.measured(value.get(field), value.get('known_' ~ field), 0) }}{% elif field == 'wall_seconds' %}{{ m.measured(value.get(field), digits=1) }}{% else %}{{ m.value(value.get(field)) }}{% endif %}</span>
                 {% endfor %}
             </div>
         {% endfor %}
     </div>
+    {% else %}<p class="callout info">Choose both Left and Right items, then press Compare.</p>{% endif %}
     <p class="page-note">Unknown cost is never zero. Compare recorded conditions before interpreting differences. Small exploratory samples do not establish graph or model superiority.</p>
 {% endblock %}

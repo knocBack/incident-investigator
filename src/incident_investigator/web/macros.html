@@ -2,8 +2,12 @@
     {% if v is none or v is undefined %}unknown{% else %}{{ v }}{% endif %}
 {%- endmacro %}
 {% macro badge(v) -%}
-    <span class="badge {{ v }}">{{ v }}</span>
+    {% set meanings = {'correct': 'Required diagnosis and evidence checks passed, including justified uncertainty where expected.', 'partial': 'Some diagnosis checks passed; the required cause and evidence checks did not all pass.', 'inconclusive': 'No adequately supported cause was established; inspect Grade for the missing checks.', 'no_report': 'No final investigation report was completed.'} %}
+    <span class="badge {{ v }}"{% if v in meanings %} title="{{ meanings[v] }}"{% endif %}>{{ v }}</span>
 {%- endmacro %}
+{% macro verdict_legend() %}
+    <details class="caption"><summary>What do the verdicts mean?</summary><p>Correct: required diagnosis and evidence checks passed, including justified uncertainty where expected. Partial: some diagnosis checks passed, but not all required cause and evidence checks. Inconclusive: no adequately supported cause was established. No_report: no final investigation report was completed. Open Grade for the checks behind each verdict.</p></details>
+{% endmacro %}
 {% macro stats(s) %}
     <div class="stats">
         <div class="stat">
@@ -11,7 +15,7 @@
             <strong>{{ s.runs }}</strong>
         </div>
         <div class="stat">
-            <label>Automatic correct</label>
+            <label>Diagnostic correct</label>
             <strong>{{ s.correct }}</strong>
         </div>
         <div class="stat">
@@ -20,7 +24,7 @@
         </div>
         <div class="stat">
             <label>Total cost (USD)</label>
-            <strong>{% if s.cost is none %}unknown{% else %}{{ '%.5f'|format(s.cost) }}{% endif %}</strong>
+            <strong>{{ cost(s) }}</strong>
         </div>
     </div>
 {% endmacro %}
@@ -30,7 +34,7 @@
             <thead>
                 <tr>
                     <th>Fault / Run</th>
-                    <th>Model / Graph</th>
+                    <th>Model / System / Set</th>
                     <th>Verdict / Execution</th>
                     <th class="number">Cost / Tokens in·out</th>
                     <th class="number">Wall / Calls</th>
@@ -50,20 +54,21 @@
                             <small>{{ r.created_at }}</small>
                         </td>
                         <td>
-                            {{ r.model or 'unknown' }}<small>{{ r.graph }}</small>
+                            {{ r.model or 'unknown' }}<small>{{ r.system }} · {{ r.case_set }} · {{ r.graph }}</small>
+                            {% if r.model == 'scripted' %}<small>Canned console replay · inconclusive expected</small>{% endif %}
                         </td>
                         <td>
-                            {{ badge(r.verdict) }}<small>{{ r.status }}</small>
+                            {{ badge(r.verdict) }}<small>{{ r.execution_label|default(r.status) }}</small>
                             {% if r.phoenix_url|phoenix_url %}
                                 <a class="button small"
                                    href="{{ r.phoenix_url|phoenix_url }}"
                                    target="_blank"
-                                   rel="noreferrer">Open in Phoenix ↗</a>
+                                   rel="noreferrer">Phoenix · live detailed view ↗</a>
                             {% endif %}
                         </td>
                         <td class="number">
-                            {% if r.cost is not none %}{{ '%.5f'|format(r.cost) }}{% else %}unknown{% endif %}
-                            <small>{{ value(r.input_tokens) }} / {{ value(r.output_tokens) }}</small>
+                            {{ cost(r) }}
+                            <small>{{ measured(r.input_tokens, r.known_input_tokens, 0) }} / {{ measured(r.output_tokens, r.known_output_tokens, 0) }}</small>
                         </td>
                         <td class="number">
                             {% if r.wall_seconds is not none %}{{ '%.1f'|format(r.wall_seconds) }}s{% else %}unknown{% endif %}
@@ -84,3 +89,37 @@
         </table>
     </div>
 {% endmacro %}
+{% macro measured(v, known=none, digits=2) -%}
+    {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}{% if known is number %}at least {{ ('%.' ~ digits ~ 'f')|format(known) }}<small>some calls unmeasured</small>{% else %}unknown{% endif %}{% endif %}
+{%- endmacro %}
+{% macro grounding(v, count, n) -%}
+    {% if v is number %}{{ '%.2f'|format(v) }}{% else %}unknown{% endif %} ({{ value(count) }}/{{ n }})
+{%- endmacro %}
+{% macro inline_measured(v, known=none, digits=2) -%}
+    {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}{% if known is number %}at least {{ ('%.' ~ digits ~ 'f')|format(known) }} (some calls unmeasured){% else %}unknown{% endif %}{% endif %}
+{%- endmacro %}
+{% macro resources(r) %}
+    <div class="check-row"><span>Cost</span><span>{{ cost(r) }}</span></div>
+    <div class="check-row"><span>Input tokens</span><span>{{ measured(r.input_tokens, r.known_input_tokens, 0) }}</span></div>
+    <div class="check-row"><span>Output tokens</span><span>{{ measured(r.output_tokens, r.known_output_tokens, 0) }}</span></div>
+    <div class="check-row"><span>Model / tool calls</span><span>{{ value(r.model_calls) }} / {{ value(r.tool_calls) }}</span></div>
+    <div class="check-row"><span>Wall seconds</span><span>{{ measured(r.wall_seconds) }}</span></div>
+{% endmacro %}
+{% macro result_card(row) %}
+    {% if row %}
+        <p>{{ row.verdicts|pretty }}{% if row.provisional %}<small>Provisional: includes ungraded attempts</small>{% endif %}</p>
+        <p>pass@1 {{ '%.3f'|format(row.pass1) }} · pass@k {{ '%.3f'|format(row.passk) }} · pass^k {{ '%.3f'|format(row.powerk) }} (k={{ row.k }})</p>
+        <div class="check-row"><span>Grounding</span><span>{{ grounding(row.grounding, row.grounding_measured, row.n) }}</span></div>
+        <div class="check-row"><span>Execution failures</span><span>{{ row.execution_failures }}</span></div>
+        <div class="check-row"><span>Model-call errors</span><span>{{ value(row.model_call_errors) }}</span></div>
+        {% if row.free_no_charge %}<p>free model, no charge · token usage may remain unknown</p>{% endif %}
+        {{ resources(dict(row.resources, free_no_charge=row.free_no_charge, scripted_no_charge=row.scripted_no_charge)) }}
+        {% for run in row.runs %}
+            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.execution_label|default(run.status) }}</a><small>{{ run.outcome }}</small></p>{% endif %}
+        {% endfor %}
+    {% else %}<p>No observed attempt.</p>{% endif %}
+{% endmacro %}
+
+{% macro cost(r) -%}
+    {% if r.free_no_charge|default(false) %}free model, no charge{% elif r.scripted_no_charge|default(false) %}scripted replay, no charge{% elif r.cost is number %}USD {{ '%.6f'|format(r.cost) }}{% elif r.known_cost is number %}at least USD {{ '%.6f'|format(r.known_cost) }} (some calls unmeasured){% else %}unknown{% endif %}
+{%- endmacro %}

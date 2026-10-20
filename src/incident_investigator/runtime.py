@@ -102,6 +102,7 @@ class Control(Record):
     case_id: str
     limits: Limits
     graph: GraphVariant = DEFAULT_GRAPH
+    system: Literal["multi", "single"] = "multi"
     revision: int = 0
     status: Literal[
         "running", "completed", "inconclusive", "interrupted", "failed", "resource_exhausted"
@@ -200,6 +201,30 @@ def _provider_schema(role: str, allow_tools: bool) -> dict:
     }
 
 
+def model_input(role, request):
+    """Render the same bounded input for execution and the console cost preview."""
+    remaining = request.get("remaining_model_calls_after_this", 1)
+    tools_left = request.get("remaining_tool_calls", 1)
+    schema = provider_schema(role, allow_tools=remaining > 0 and tools_left > 0)
+    messages = [
+        *request["messages"],
+        {
+            "role": "user",
+            "content": (
+                'Return the tagged action as JSON under the "action" wrapper. '
+                "You have NO native or callable tools. Prior user messages contain "
+                "the real registry tool results. Read them and advance the investigation; "
+                "do not repeat a completed query without a new evidence question. "
+                "Return final findings once you have enough evidence, including gaps. "
+                f"Budget: {remaining} task model calls remain after this "
+                f"response; {tools_left} tool calls remain. "
+                "If either is 0, return a final result now, not more tools."
+            ),
+        },
+    ]
+    return messages, schema
+
+
 class Investigation:
     def __init__(
         self,
@@ -211,6 +236,7 @@ class Investigation:
         *,
         faults: dict[str, FaultSelection] | None = None,
         graph: GraphVariant = DEFAULT_GRAPH,
+        system: Literal["multi", "single"] = "multi",
     ) -> None:
         if graph != DEFAULT_GRAPH:
             raise ValueError(f"unknown graph: {graph}")
@@ -219,16 +245,22 @@ class Investigation:
         self.registry = build_registry(snapshot)
         self.faults = faults or {}
         self.variant = graph
+        if system not in {"multi", "single"}:
+            raise ValueError(f"unknown system: {system}")
+        self.system = system
         self.invocation_id = identity()
         self.started = time.monotonic()
         self.deadline = self.started + limits.wall_seconds
-        self.observer = TraceSession(out.name, snapshot.case_id, graph=graph, enabled=False)
+        self.observer = TraceSession(
+            out.name, snapshot.case_id, graph=graph, system=system, enabled=False
+        )
         self.adapters = {role: TypeAdapter(action_type(body)) for role, body in PAYLOADS.items()}
 
     def trace(self, event: str, **values: Any) -> None:
         row = {
             "run_id": self.out.name,
             "graph": self.variant,
+            "system": self.system,
             "event": event,
             "at": time.time(),
             **values,
@@ -286,8 +318,12 @@ class Investigation:
             **(
                 {
                     "budget": {
-                        "task_model_calls": control.limits.task_model_calls,
-                        "task_tool_calls": control.limits.task_tool_calls,
+                        "task_model_calls": control.limits.max_model_calls
+                        if role == "single"
+                        else control.limits.task_model_calls,
+                        "task_tool_calls": control.limits.max_tool_calls
+                        if role == "single"
+                        else control.limits.task_tool_calls,
                         "note": "Identical repeated queries are answered from earlier "
                         "receipts without a tool call. Start with catalog to learn names.",
                     }
@@ -425,7 +461,13 @@ class Investigation:
         total = sum(call.kind == kind for call in c.calls.values())
         cap = c.limits.max_model_calls if kind == "model" else c.limits.max_tool_calls
         count = task.model_calls if kind == "model" else task.tool_calls
-        task_cap = c.limits.task_model_calls if kind == "model" else c.limits.task_tool_calls
+        task_cap = (
+            cap
+            if task.role == "single"
+            else c.limits.task_model_calls
+            if kind == "model"
+            else c.limits.task_tool_calls
+        )
         if time.monotonic() >= self.deadline or total >= cap:
             self.close(c, "resource_exhausted", f"{kind} call or wall time limit")
             return
@@ -442,7 +484,12 @@ class Investigation:
                 "remaining_tool_calls": max(
                     0,
                     min(
-                        c.limits.task_tool_calls - task.tool_calls,
+                        (
+                            c.limits.max_tool_calls
+                            if task.role == "single"
+                            else c.limits.task_tool_calls
+                        )
+                        - task.tool_calls,
                         c.limits.max_tool_calls - tool_total,
                     ),
                 ),
@@ -556,6 +603,8 @@ class Investigation:
         task.messages.append({"role": "assistant", "content": json.dumps(action)})
         repairs = Repairs()
         try:
+            if receipt.get("finish_reason") == "length":
+                raise ValueError("output_truncated")
             allowed = ALLOWED_TOOLS.get(task.role, set())
             final_only = call.request.get("remaining_model_calls_after_this", 1) <= 0 or (
                 call.request.get("remaining_tool_calls", 1) <= 0
@@ -600,12 +649,15 @@ class Investigation:
                 # Model IDs are labels only; authoritative identities are runtime allocated.
                 field = {
                     "reasoning": ("hypotheses", "hypothesis_id"),
+                    "single": ("hypotheses", "hypothesis_id"),
                     "critic": ("objections", "objection_id"),
                 }.get(task.role)
                 if field:
                     for item in data["result"][field[0]]:
                         item["model_label"] = item[field[1]]
                         item[field[1]] = identity()
+                if task.role == "single":
+                    data["result"]["report"]["revision_id"] = task.task_id
                 task.result, task.status, task.phase = data["result"], "succeeded", "settled"
             self.record_repairs(c, task, call.call_id, repairs)
             self.trace(
@@ -629,7 +681,9 @@ class Investigation:
                 outcome="rejected",
                 error=error,
             )
-            allowance = task.model_calls < c.limits.task_model_calls
+            allowance = task.model_calls < (
+                c.limits.max_model_calls if task.role == "single" else c.limits.task_model_calls
+            )
             if task.corrections == 0 and allowance:
                 task.corrections += 1
                 task.phase = "model"
@@ -643,7 +697,9 @@ class Investigation:
                 task.status, task.phase, task.failure = (
                     "failed",
                     "settled",
-                    f"invalid output: {error}",
+                    "output_truncated"
+                    if receipt.get("finish_reason") == "length"
+                    else f"invalid output: {error}",
                 )
 
     def report(self, c: Control, partial_reason: str | None = None) -> None:
@@ -684,6 +740,16 @@ class Investigation:
                 c,
                 "reasoning",
                 "Rank hypotheses using ALL settled specialist outcomes, support AND contradictions. Address prior objections; inconclusive is valid.",
+            )
+        ]
+
+    def start_single(self, c: Control) -> None:
+        c.stage = "single"
+        c.batch = [
+            self.task(
+                c,
+                "single",
+                "Investigate the alert, test alternatives, and report the supported cause or justified uncertainty.",
             )
         ]
 
@@ -739,7 +805,9 @@ class Investigation:
             if key in c.query_index:
                 self.replay(c, task, c.query_index[key], request)
                 continue
-            if task.tool_calls >= c.limits.task_tool_calls:
+            if task.tool_calls >= (
+                c.limits.max_tool_calls if task.role == "single" else c.limits.task_tool_calls
+            ):
                 notes.append(f"{request['name']}: task tool-call allowance exhausted; not run")
                 continue
             self.admit(c, task, "tool", request, query=key)
@@ -815,6 +883,8 @@ class Investigation:
         self.trace(
             "state_transition",
             stage=c.stage,
+            model_calls=sum(call.kind == "model" for call in c.calls.values()),
+            tool_calls=sum(call.kind == "tool" for call in c.calls.values()),
             revision=c.revision,
             status=c.status,
             outcome=c.stop_reason or c.status,
@@ -862,32 +932,13 @@ class Investigation:
                     )
                     async with asyncio.timeout(timeout):
                         if call.kind == "model":
-                            remaining = call.request.get("remaining_model_calls_after_this", 1)
-                            tools_left = call.request.get("remaining_tool_calls", 1)
-                            schema = provider_schema(
-                                call.role, allow_tools=remaining > 0 and tools_left > 0
-                            )
-                            messages = [
-                                *call.request["messages"],
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        'Return the tagged action as JSON under the "action" wrapper. '
-                                        "You have NO native or callable tools. Prior user messages contain "
-                                        "the real registry tool results. Read them and advance the investigation; "
-                                        "do not repeat a completed query without a new evidence question. "
-                                        "Return final findings once you have enough evidence, including gaps. "
-                                        f"Budget: {remaining} task model calls remain after this "
-                                        f"response; {tools_left} tool calls remain. "
-                                        "If either is 0, return a final result now, not more tools."
-                                    ),
-                                },
-                            ]
+                            messages, schema = model_input(call.role, call.request)
                             self.observer.input(span, messages)
                             result = await self.model.complete(messages, schema)
                             receipt["payload"] = result.action.get("action", result.action)
                             receipt["raw_id"] = result.raw_id
                             receipt["model"] = result.model
+                            receipt["finish_reason"] = result.finish_reason
                             receipt["provider_latency_ms"] = result.latency_ms
                             if result.usage:
                                 receipt["usage"] = {
@@ -929,19 +980,24 @@ class Investigation:
             tokens=receipt["usage"] or "unknown",
             model=receipt.get("model"),
             generation_id=receipt.get("raw_id"),
+            finish_reason=receipt.get("finish_reason"),
             latency_ms=receipt["latency_ms"],
             outcome=receipt["error"] or "received",
         )
         return {"inbox": {call.call_id: receipt}}
 
     def graph(self):
-        """Build the checkpointed staged workflow."""
+        """Select a workflow while sharing admission, execution and receipts."""
+        if self.system == "single":
+            from incident_investigator.single import build_single_graph
+
+            return build_single_graph(self)
         from incident_investigator.staged import build_staged_graph
 
         return build_staged_graph(self)
 
 
-def model_names(model: ModelAdapter) -> dict[str, str]:
+def model_names(model: ModelAdapter, system: str = "multi") -> dict[str, str]:
     resolve = getattr(model, "model_for_role", None)
     return {
         role: resolve(role)
@@ -951,7 +1007,7 @@ def model_names(model: ModelAdapter) -> dict[str, str]:
         else "gpt-6-luna"
         if isinstance(model, CodexExecModel)
         else type(model).__name__
-        for role in PAYLOADS
+        for role in (["single"] if system == "single" else [r for r in PAYLOADS if r != "single"])
     }
 
 
@@ -980,7 +1036,9 @@ async def investigate(
     semaphore: asyncio.Semaphore | None = None,
     faults: dict[str, FaultSelection] | None = None,
     graph: GraphVariant = DEFAULT_GRAPH,
+    system: Literal["multi", "single"] = "multi",
     resume: Path | None = None,
+    _run_id: str | None = None,
 ) -> Path:
     """Start or resume one fenced investigation under its original finite limits."""
     from langsmith import tracing_context
@@ -991,16 +1049,18 @@ async def investigate(
     if graph != DEFAULT_GRAPH:
         raise ValueError(f"unknown graph: {graph}")
     out = out if out is not None else home() / "runs"
-    run_dir = Path(resume) if resume else out / identity()
+    run_dir = Path(resume) if resume else out / (_run_id or identity())
     if not resume:
         run_dir.mkdir(parents=True, exist_ok=False)
     with invocation_lock(run_dir):
-        models = model_names(model)
+        models = model_names(model, system)
         if resume:
             metadata, restored = resume_metadata(run_dir)
             if snapshot is not None and snapshot.dataset_digest != restored.dataset_digest:
                 raise ValueError("incompatible resume dataset")
             snapshot = restored
+            system = metadata.get("system", "multi")
+            models = model_names(model, system)
             if models != metadata["models"]:
                 raise ValueError("incompatible resume model configuration")
             if limits is not None and limits.model_dump() != metadata["limits"]:
@@ -1020,6 +1080,7 @@ async def investigate(
                 "case_id": snapshot.case_id,
                 "limits": limits.model_dump(),
                 "graph": graph,
+                "system": system,
                 "models": models,
                 "deadline_at": time.time() + limits.wall_seconds,
                 "versions": versions(snapshot),
@@ -1043,6 +1104,7 @@ async def investigate(
             semaphore or asyncio.Semaphore(4),
             faults=faults,
             graph=graph,
+            system=system,
         )
         runner.deadline = time.monotonic() + max(0, metadata["deadline_at"] - time.time())
         initial = Control(
@@ -1051,13 +1113,16 @@ async def investigate(
             limits=limits,
             models=models,
             graph=graph,
+            system=system,
         )
         config = {
             "configurable": {"thread_id": metadata["run_id"]},
             "callbacks": [],
             "recursion_limit": 1000,
         }
-        with TraceSession(metadata["run_id"], snapshot.case_id, graph=graph) as observer:
+        with TraceSession(
+            metadata["run_id"], snapshot.case_id, graph=graph, system=system
+        ) as observer:
             runner.observer = observer
             await observer.save_link(run_dir, final=False)
             async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:

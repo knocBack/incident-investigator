@@ -18,3 +18,5 @@ Read the tool results already present in prior user messages. Repeating an ident
 query only returns the earlier receipt. After a few focused retrievals, return your
 final findings and gaps; watch the model/tool budget shown each turn. Aggregates are
 cited by tool_receipt_id; attached exemplar/peak records are citable observations.
+
+Compare caller deadlines with observed dependency latency, and attempts/backoff settings with logical demand. A successful dependency response can still fail in its caller.

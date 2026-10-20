@@ -16,6 +16,7 @@ from incident_investigator.contracts import PROFILES, Limits
 from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument
 from incident_investigator.lab.__main__ import snapshot
 from incident_investigator.lab.app import FAULTS, JsonlTelemetrySink, create_app
+from incident_investigator.lab.cases import SECOND_CASES, VARIANTS, freeze_case
 from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
 from incident_investigator.runtime import investigate
 from incident_investigator.sources.loader import load_snapshot
@@ -25,8 +26,16 @@ from incident_investigator.workspace import home
 
 def profile(args) -> Limits:
     """Live providers get the demo-live profile; its per-call timeout also bounds adapters."""
-    selected = getattr(args, "limits_profile", None)
-    return PROFILES[selected or ("demo-live" if args.model in {"openrouter", "codex"} else "demo")]
+    base = PROFILES[
+        getattr(args, "limits_profile", None)
+        or ("demo-live" if args.model in {"openrouter", "codex"} else "demo")
+    ]
+    overrides = {
+        name: getattr(args, option)
+        for name, option in (("call_seconds", "call_seconds"), ("wall_seconds", "wall_seconds"))
+        if getattr(args, option, None) is not None
+    }
+    return Limits.model_validate({**base.model_dump(), **overrides})
 
 
 def model(args):
@@ -46,12 +55,41 @@ def model(args):
 
 async def demo(args) -> Path:
     """Exercise the real FastAPI routes in-process; investigators see only a snapshot."""
+    cached = getattr(args, "_snapshot", None)
+    if cached is not None:
+        directory = await investigate(
+            cached,
+            model(args),
+            args.out,
+            limits=profile(args),
+            _run_id=getattr(args, "_run_id", None),
+            graph=getattr(args, "graph", DEFAULT_GRAPH),
+            system=getattr(args, "system", "multi"),
+        )
+        (directory / "expectation.json").write_text(json.dumps({"family": args.fault}) + "\n")
+        return directory
+    if args.fault in {**SECOND_CASES, **VARIANTS}:
+        with tempfile.TemporaryDirectory(prefix="ii-case-") as directory:
+            root = Path(directory)
+            await freeze_case(args.fault, root)
+            case = load_snapshot(args.fault, root)
+        if getattr(args, "_freeze_only", False):
+            return case
+        args._snapshot = case
+        return await demo(args)
     with tempfile.TemporaryDirectory(prefix="ii-demo-") as directory:
         root = Path(directory)
         telemetry = root / "telemetry.jsonl"
         # A simulated clock spaces baseline, fault and failing load seconds apart (ending
         # before now), so before/after comparisons and change times are meaningful.
-        moment = [datetime.now(UTC) - timedelta(seconds=40)]
+        moment = [
+            (
+                datetime(2026, 1, 1, 14, 10, tzinfo=UTC)
+                if getattr(args, "_fixed_clock", False)
+                else datetime.now(UTC)
+            )
+            - timedelta(seconds=40)
+        ]
         app = create_app(clock=lambda: moment[0], telemetry_sink=JsonlTelemetrySink(telemetry))
         # M1 metrics cover ten-second windows; include the whole baseline window.
         start = moment[0] - timedelta(seconds=11)
@@ -81,12 +119,16 @@ async def demo(args) -> Path:
                     start=start,
                 )
             )
+            frozen = load_snapshot("lab-demo", source_root)
+            if getattr(args, "_freeze_only", False):
+                return frozen
             directory = await investigate(
-                load_snapshot("lab-demo", source_root),
+                frozen,
                 getattr(args, "_model_adapter", None) or model(args),
                 args.out,
                 limits=profile(args),
                 graph=getattr(args, "graph", DEFAULT_GRAPH),
+                system=getattr(args, "system", "multi"),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -117,6 +159,7 @@ async def run(args) -> int:
                     semaphore=semaphore,
                     limits=profile(args),
                     graph=getattr(args, "graph", DEFAULT_GRAPH),
+                    system=getattr(args, "system", "multi"),
                 )
                 for case in snapshots
             ]
@@ -137,6 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("investigate", "demo"):
         command = sub.add_parser(name)
         add_graph_argument(command)
+        command.add_argument("--call-seconds", type=float)
+        command.add_argument("--wall-seconds", type=float)
         command.add_argument(
             "--model", choices=["scripted", "codex", "openrouter"], default="scripted"
         )
@@ -163,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--fault",
                 default="bad_configuration",
-                choices=FAULTS,
+                choices=[*FAULTS, *SECOND_CASES, *VARIANTS],
             )
     from incident_investigator.grading.suite import add_commands
 
@@ -175,6 +220,25 @@ def build_parser() -> argparse.ArgumentParser:
     command = sub.add_parser("console", help="serve the local artifact console")
     command.add_argument("--port", type=int, default=8765)
     return parser
+
+
+async def _graceful_evaluation(args):
+    """Let the suite's cancellation cleanup retain grades and final spend records."""
+    import signal
+
+    from incident_investigator.grading.suite import execute
+
+    loop, task = asyncio.get_running_loop(), asyncio.current_task()
+
+    def terminate():
+        if not task.cancelling():
+            task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, terminate)
+    try:
+        await execute(args)
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 def main() -> None:
@@ -204,9 +268,11 @@ def main() -> None:
         uvicorn.run(create_console(), host="127.0.0.1", port=args.port)
         return
     if args.command in {"eval", "eval-suite"}:
-        from incident_investigator.grading.suite import execute
-
-        asyncio.run(execute(args))
+        try:
+            asyncio.run(_graceful_evaluation(args))
+        except asyncio.CancelledError:
+            print("Cancelled; results and spend records finalized", flush=True)
+            raise SystemExit(143) from None
         return
     if args.command == "inspect":
         result = json.loads((args.run_dir / "result.json").read_text())

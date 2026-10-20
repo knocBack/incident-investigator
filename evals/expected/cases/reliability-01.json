@@ -1,0 +1,66 @@
+{
+  "version": "cases.v1",
+  "family": "resource_exhaustion",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "connection|pool",
+    "leak|return|releas|lease|owned"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "lease remains owned"
+        }
+      }
+    },
+    {
+      "source": "metrics",
+      "service": "database",
+      "predicates": {
+        "name": {
+          "eq": "connection_count"
+        },
+        "value": {
+          "eq": 24
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "body": {
+            "regex": "lease remains owned"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "metrics",
+        "service": "database",
+        "predicates": {
+          "name": {
+            "eq": "connection_count"
+          },
+          "value": {
+            "eq": 24
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "database connection limit",
+    "database contention"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review.",
+  "reliability": true,
+  "reliability_rule": "source-01"
+}

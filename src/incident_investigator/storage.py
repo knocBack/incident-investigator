@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from incident_investigator.graph_config import recorded_graph
+from incident_investigator.graph_config import recorded_graph, recorded_system
 from incident_investigator.workspace import home, total, write_json
 
 
@@ -233,6 +233,7 @@ class MemoryEvalCatalog(EvalCatalog):
         return [
             {
                 "id": name,
+                "case_set": "variants" if name.startswith("reliability-") else "primary",
                 "injectable": name in self.injectable,
                 "evaluable": name in self.definitions,
                 "version": self.definitions.get(name, {}).get("version", "lab registry"),
@@ -249,12 +250,15 @@ class FileEvalCatalog(MemoryEvalCatalog):
     def __init__(self, directory: Path | None = None, injectable=None):
         from incident_investigator.grading.grader import EXPECTED
         from incident_investigator.lab.app import FAULTS
+        from incident_investigator.lab.cases import SECOND_CASES, VARIANTS
         from incident_investigator.workspace import read_json
 
         folder = directory if directory is not None else EXPECTED / "faults"
+        definitions = {p.stem: read_json(p) for p in folder.glob("*.json")}
+        if directory is None:
+            definitions.update({p.stem: read_json(p) for p in (EXPECTED / "cases").glob("*.json")})
         super().__init__(
-            {p.stem: read_json(p) for p in folder.glob("*.json")},
-            FAULTS if injectable is None else injectable,
+            definitions, (*FAULTS, *SECOND_CASES, *VARIANTS) if injectable is None else injectable
         )
 
 
@@ -344,9 +348,31 @@ class IndexedRunRepository(RunRepository):
             models = (
                 result.get("models")
                 or grade.get("models")
+                or (
+                    {"requested": grade["suite_attempt"]["model"]}
+                    if grade.get("suite_attempt", {}).get("model")
+                    else {}
+                )
                 or ({"requested": attempt["model"]} if attempt.get("model") else {})
             )
             suite = suite_for(prefix)
+            attempt_context = (
+                store.json(
+                    suite["prefix"] + "/attempts/" + result.get("run_id", "unknown") + ".json"
+                )
+                if suite
+                else {}
+            )
+            fault = (
+                grade.get("suite_attempt", {}).get("fault")
+                or pointer.get("family")
+                or attempt_context.get("fault")
+                or grade.get("family", "unknown")
+            )
+            system = recorded_system(
+                result.get("system", grade.get("system", attempt_context.get("system"))),
+                result.get("graph", grade.get("graph")),
+            )
             created = min(times) if times else result.get("created", 0)
             rows.append(
                 {
@@ -356,18 +382,39 @@ class IndexedRunRepository(RunRepository):
                     "prefix": prefix,
                     "location": location,
                     "case": result.get("case_id", "unknown"),
-                    "fault": grade.get("family", pointer.get("family", "unknown")),
+                    "fault": fault,
+                    "system": system,
+                    "case_set": "variants"
+                    if grade.get("suite_kind") == "reliability" or fault.startswith("reliability-")
+                    else "primary",
+                    "suite_set": suite["batch"].get("suite_set", "legacy")
+                    if suite
+                    else "standalone",
                     "models": models,
                     "phoenix_url": phoenix.get("url"),
                     "model": ", ".join(sorted(set(models.values()))),
                     "graph": recorded_graph(result.get("graph", grade.get("graph"))),
-                    "status": result.get(
+                    "status": grade.get("process", {}).get("execution_status")
+                    or result.get(
                         "status",
                         "failed" if prefix + "/attempt-error.json" in keys else "unfinished",
                     ),
                     "verdict": grade.get("verdict", "ungraded"),
                     "grade": grade,
                     "cost": recorded_cost(result),
+                    "known_cost": total(usage, "known_cost")
+                    if any("known_cost" in u for u in usage)
+                    else recorded_cost(result),
+                    "known_input_tokens": total(usage, "known_input_tokens"),
+                    "known_output_tokens": total(usage, "known_output_tokens"),
+                    "model_calls": sum(
+                        c.get("kind") == "model"
+                        for c in result.get("state", {}).get("calls", {}).values()
+                    ),
+                    "tool_calls": sum(
+                        c.get("kind") == "tool"
+                        for c in result.get("state", {}).get("calls", {}).values()
+                    ),
                     "input_tokens": total(usage, "input_tokens"),
                     "output_tokens": total(usage, "output_tokens"),
                     "calls": len(result.get("state", {}).get("calls", {})),
@@ -426,15 +473,35 @@ class IndexedRunRepository(RunRepository):
                 "status": "unknown",
                 **(source or {}),
                 "grade": grade,
-                "fault": grade.get("family", (source or {}).get("fault", "unknown")),
+                "fault": grade.get("suite_attempt", {}).get("fault")
+                or (source or {}).get("fault")
+                or grade.get("family", "unknown"),
                 "verdict": grade.get("verdict", "ungraded"),
                 "models": models,
                 "model": ", ".join(sorted(set(models.values()))),
                 "graph": recorded_graph(grade.get("graph", (source or {}).get("graph"))),
+                "system": recorded_system(
+                    grade.get("system", (source or {}).get("system")),
+                    grade.get("graph", (source or {}).get("graph")),
+                ),
+                "case_set": "variants"
+                if grade.get("suite_kind") == "reliability"
+                or grade.get("family", "").startswith("reliability-")
+                else "primary",
+                "suite_set": suite["batch"].get("suite_set", "legacy"),
                 "suite": suite["id"],
                 "suite_name": suite["name"],
             }
-            for field in ("cost", "input_tokens", "output_tokens"):
+            for field in (
+                "cost",
+                "input_tokens",
+                "output_tokens",
+                "known_cost",
+                "known_input_tokens",
+                "known_output_tokens",
+                "model_calls",
+                "tool_calls",
+            ):
                 if field in totals and (
                     field != "cost" or totals[field] is not None or attempt[field] is None
                 ):

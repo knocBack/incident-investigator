@@ -6,7 +6,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-Role = Literal["orchestrator", "observability", "dependency", "reasoning", "critic", "reporting"]
+Role = Literal[
+    "orchestrator", "observability", "dependency", "reasoning", "critic", "reporting", "single"
+]
 Specialist = Literal["observability", "dependency"]
 
 
@@ -18,7 +20,7 @@ class Limits(Record):
     max_model_calls: int = Field(default=40, ge=1, le=200)
     max_tool_calls: int = Field(default=60, ge=1, le=300)
     wall_seconds: float = Field(default=240, gt=0, le=3600, allow_inf_nan=False)
-    call_seconds: float = Field(default=30, gt=0, le=120, allow_inf_nan=False)
+    call_seconds: float = Field(default=30, gt=0, le=600, allow_inf_nan=False)
     task_model_calls: int = Field(default=10, ge=1, le=40)
     task_tool_calls: int = Field(default=15, ge=1, le=60)
     call_retries: int = Field(default=1, ge=0, le=2)
@@ -141,6 +143,10 @@ class ToolRequest(Record):
     arguments: dict[str, JsonValue]
 
 
+class SingleResult(ReasoningResult):
+    report: Report
+
+
 class ToolsAction(Record):
     kind: Literal["tools"]
     requests: list[ToolRequest] = Field(min_length=1, max_length=5)
@@ -166,6 +172,7 @@ PAYLOADS = {
     "reasoning": ReasoningResult,
     "critic": Review,
     "reporting": Report,
+    "single": SingleResult,
 }
 ALLOWED_TOOLS = {
     "observability": {
@@ -180,3 +187,4 @@ ALLOWED_TOOLS = {
     # Dependency follows the call path, so it can check downstream health in aggregate.
     "dependency": {"catalog", "dependencies", "changes", "history", "log_counts", "metric_stats"},
 }
+ALLOWED_TOOLS["single"] = set().union(*ALLOWED_TOOLS.values())

@@ -21,3 +21,5 @@ Read the tool results already present in prior user messages. Repeating an ident
 query only returns the earlier receipt. After a few focused retrievals, return your
 final findings and gaps; watch the model/tool budget shown each turn. Aggregates are
 cited by tool_receipt_id; attached exemplar/peak records are citable observations.
+
+Compare measurement windows and version/operation scopes before interpreting aggregates. Distinguish logical customer requests from internal attempts. Partial series and missing intervals are unknown, never zero or recovery.

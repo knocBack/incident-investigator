@@ -9,11 +9,12 @@
         </div>
         <a class="button primary" href="/run">＋ Run evaluation</a>
     </div>
+    <p class="page-note">Start at <a href="/run">Run evaluation</a> to launch and watch a selective comparison.</p>
     {{ m.stats(stats) }}
     <form class="filters" method="get">
         {% for key, opts in options.items() %}
             <label>
-                {{ key|title }}<select name="{{ key }}">
+                {{ {'fault':'Incident', 'case_set':'Set'}.get(key, key|title) }}<select name="{{ key }}">
                 <option value="">All</option>
                 {% for option in opts %}
                     <option value="{{ option }}"
@@ -43,8 +44,8 @@
             <h2>Suites</h2>
             {% for suite in suites %}
                 <p>
-                    <a href="/suites/{{ suite.id }}">{{ suite.name }}</a>
-                    <small>{{ suite.location }}</small>
+                    <a href="/suites/{{ suite.id }}">{{ suite.title }}</a>
+                    <small>{{ suite.batch.get('suite_set', 'legacy') }} · {{ suite.batch.get('systems', ['multi'])|join(' / ') }}</small>
                 </p>
             {% endfor %}
         </div>

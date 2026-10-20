@@ -10,9 +10,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from incident_investigator.graph_config import recorded_graph
+from incident_investigator.graph_config import recorded_graph, recorded_system
 
-VERSION = "grader.v1"
+VERSION = "grader.v3"
 _SOURCE_EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
 EXPECTED = Path(
     os.environ.get(
@@ -22,9 +22,14 @@ EXPECTED = Path(
 ).expanduser()
 FAMILIES = tuple(sorted(p.stem for p in (EXPECTED / "faults").glob("*.json")))
 
+CASES = ("case-02", "case-04", "case-06", "case-08", "case-10", "reliability-01", "reliability-02")
+
 
 def expectation(family):
-    return json.loads((EXPECTED / "faults" / f"{family}.json").read_text(encoding="utf-8"))
+    if family not in FAMILIES and family not in CASES:
+        raise ValueError("unknown expectation")
+    group = "faults" if family in FAMILIES else "cases"
+    return json.loads((EXPECTED / group / f"{family}.json").read_text())
 
 
 def matches(row, matcher):
@@ -76,6 +81,56 @@ def measured_sum(values):
     return sum(values) if values and all(isinstance(v, int | float) for v in values) else None
 
 
+def reliability_result(result, expected, verdict, justified):
+    """Observe the actual failed call and its bounded successful retry, not counters."""
+    if expected.get("expected_diagnosis") == "inconclusive":
+        return {"kind": "uncertainty", "justified_uncertainty": justified, "success": justified}
+    rule = expected.get("reliability_rule")
+    if not rule:
+        return None
+    state = result.get("state", {})
+    calls = state.get("calls", {})
+    receipts = result.get("receipts", {})
+    selected = {
+        key: call
+        for key, call in calls.items()
+        if call.get("kind") == "tool" and (call.get("fault") or {}).get("rule_id") == rule
+    }
+    failed = {
+        key: call
+        for key, call in selected.items()
+        if receipts.get(key, {}).get("error")
+        or (receipts.get(key, {}).get("payload") or {}).get("source_status") == "failed"
+    }
+    successors = {
+        key: call
+        for key, call in calls.items()
+        if call.get("retry_of") in failed
+        and 0 < call.get("retry", 0) <= state.get("limits", {}).get("call_retries", 0)
+        and call.get("request") == failed[call["retry_of"]].get("request")
+    }
+    successful = [
+        key
+        for key in successors
+        if not receipts.get(key, {}).get("error")
+        and (receipts.get(key, {}).get("payload") or {}).get("source_status") == "complete"
+        and bool((receipts.get(key, {}).get("payload") or {}).get("observations"))
+    ]
+    exercised, recovered = bool(failed), bool(successful)
+    return {
+        "kind": "recovery",
+        "rule_id": rule,
+        "fault_exercised": exercised,
+        "failed_retrieval": bool(failed),
+        "bounded_successor": bool(successors),
+        "successful_retrieval": bool(successful),
+        "recovered": recovered,
+        "status": "recovered" if recovered else "failed" if exercised else "not_exercised",
+        "diagnostic_correct": verdict == "correct",
+        "success": recovered and verdict == "correct",
+    }
+
+
 def grade(result, expected, events=()):
     state = result.get("state", {})
     evidence = state.get("evidence", {})
@@ -101,7 +156,19 @@ def grade(result, expected, events=()):
             if row.get(k)
         )
 
-    valid = {k for k, row in evidence.items() if before_cutoff(row)}
+    digest = result.get("dataset_digest")
+
+    def same_dataset(row):
+        return not digest or not row.get("dataset_digest") or row["dataset_digest"] == digest
+
+    valid = {k for k, row in evidence.items() if before_cutoff(row) and same_dataset(row)}
+    receipts = {
+        k
+        for k, receipt in state.get("tool_receipts", {}).items()
+        if same_dataset(receipt.get("page") or {})
+        and before_cutoff({"event_time": (receipt.get("page") or {}).get("cutoff")})
+    }
+    valid_refs = valid | receipts
     key_ids = {
         k for k in valid if any(matches(evidence[k], m) for m in expected["key_evidence_matchers"])
     }
@@ -114,20 +181,42 @@ def grade(result, expected, events=()):
         re.search(pattern, statement, re.I) for pattern in expected["mechanism_keywords"]
     )
     key_cited = bool(set(top.get("supporting_evidence", [])) & key_ids)
+    cited = set(top.get("supporting_evidence", [])) & valid
+    required = all(
+        any(any(matches(evidence[key], matcher) for matcher in group) for key in cited)
+        for group in expected.get("required_evidence_groups", [])
+    )
+    support_valid = set(top.get("supporting_evidence", [])) <= valid_refs
+    if expected.get("expected_diagnosis") == "inconclusive":
+        text = json.dumps({"hypotheses": hypotheses, "report": report}).lower()
+        justified = (
+            result.get("diagnosis") == "inconclusive"
+            and result.get("status") == "completed"
+            and service
+            and required
+            and support_valid
+            and bool(cited)
+            and all(re.search(pattern, text, re.I) for pattern in expected["uncertainty_keywords"])
+            and not any(re.search(pattern, text, re.I) for pattern in expected["forbidden_claims"])
+        )
+    else:
+        justified = False
     if not report or not report.get("summary", "").strip():
         verdict = "no_report"
+    elif expected.get("expected_diagnosis") == "inconclusive":
+        verdict = "correct" if justified else "wrong"
     elif not hypotheses or result.get("diagnosis") == "inconclusive":
         verdict = "inconclusive"
-    elif service and mechanism and key_cited:
+    elif service and mechanism and key_cited and required and support_valid:
         verdict = "correct"
     elif service or key_cited:
         verdict = "partial"
     else:
         verdict = "wrong"
     refs = list(references({"hypotheses": hypotheses, "report": report}))
-    receipts = set(state.get("tool_receipts", {}))
     claim_supported = [
-        bool(h.get("supporting_evidence")) and set(h["supporting_evidence"]) <= valid
+        bool(set(h.get("supporting_evidence", [])) & valid)
+        and set(h["supporting_evidence"]) <= valid_refs
         for h in hypotheses
     ]
     queries = [
@@ -178,11 +267,20 @@ def grade(result, expected, events=()):
         "family": expected["family"],
         "run_id": result.get("run_id"),
         "graph": recorded_graph(result.get("graph")),
+        "system": recorded_system(result.get("system"), result.get("graph")),
+        "case_id": result.get("case_id"),
+        "suite_kind": "reliability"
+        if expected.get("expected_diagnosis") or expected.get("reliability")
+        else "primary",
         "verdict": verdict,
+        "reliability": reliability_result(result, expected, verdict, justified),
         "diagnosis_checks": {
             "culprit_service": service,
             "mechanism": bool(mechanism),
             "key_evidence_cited": key_cited,
+            "required_evidence_groups": required,
+            "support_references_valid": support_valid,
+            "justified_uncertainty": justified,
         },
         "grounding": {
             "hypothesis_claim_fraction": sum(claim_supported) / len(claim_supported)

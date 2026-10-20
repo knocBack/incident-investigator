@@ -1,0 +1,58 @@
+{
+  "version": "cases.v1",
+  "family": "resource_exhaustion",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "memory|oom",
+    "cache|growth|exhaust"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "memory limit termination"
+        }
+      }
+    },
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "cache size sample"
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "body": {
+            "regex": "memory limit termination"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "body": {
+            "regex": "cache size sample"
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "database contention",
+    "traffic spike"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review."
+}

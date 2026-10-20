@@ -1,0 +1,82 @@
+{
+  "version": "cases.v1",
+  "family": "deployment_regression",
+  "culprit_service": "checkout",
+  "mechanism_keywords": [
+    "response|field|pars",
+    "stock_count|missing|keyerror|assum"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "checkout",
+      "predicates": {
+        "body": {
+          "regex": "KeyError"
+        }
+      }
+    },
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "body": {
+          "regex": "HTTP 200"
+        }
+      }
+    },
+    {
+      "source": "changes",
+      "service": "checkout",
+      "predicates": {
+        "changes": {
+          "contains": {
+            "key": "response_field"
+          }
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "checkout",
+        "predicates": {
+          "body": {
+            "regex": "KeyError"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "body": {
+            "regex": "HTTP 200"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "changes",
+        "service": "checkout",
+        "predicates": {
+          "changes": {
+            "contains": {
+              "key": "response_field"
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "inventory unavailable",
+    "database contention"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review."
+}

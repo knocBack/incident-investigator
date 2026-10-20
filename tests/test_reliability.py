@@ -138,8 +138,24 @@ async def test_resume_keeps_original_expired_deadline_and_consumed_allowances(
 
 @pytest.mark.parametrize("outcome", ["timeout", "error", "partial"])
 async def test_tool_failure_retries_or_retains_explicit_gap_without_losing_sibling(
-    tmp_path, outcome
+    tmp_path, outcome, monkeypatch
 ):
+    from incident_investigator import runtime
+    from incident_investigator.tools.faults import apply_fault
+
+    def source_fault(query, selection, *, timeout_seconds):
+        # Expire only the intentionally stalled source. A 50ms global call limit
+        # also timed out healthy queries under CI load, hiding partial responses
+        # behind an unrelated retry. Runtime deadline enforcement has other tests.
+        async def delayed_query():
+            if selection.outcome == "partial":
+                # Retain coverage of a healthy response slower than the old limit.
+                await asyncio.sleep(0.075)
+            return await query()
+
+        return apply_fault(delayed_query, selection, timeout_seconds=0.001)
+
+    monkeypatch.setattr(runtime, "apply_fault", source_fault)
     snapshot = load_snapshot("dev-00")
     snapshot = replace(
         snapshot,
@@ -157,7 +173,7 @@ async def test_tool_failure_retries_or_retains_explicit_gap_without_losing_sibli
         ),
     )
     directory = await investigate(
-        snapshot, Scenario(followup=False), tmp_path, limits=Limits(call_seconds=0.05)
+        snapshot, Scenario(followup=False), tmp_path, limits=Limits(call_seconds=5)
     )
     saved = result(directory)
     assert saved["status"] == "completed"
@@ -168,9 +184,22 @@ async def test_tool_failure_retries_or_retains_explicit_gap_without_losing_sibli
         if call["kind"] == "tool" and call["request"]["name"] == "logs"
     ]
     assert len(logs) == (1 if outcome == "partial" else 2)
+    assert logs[0]["fault"]["outcome"] == outcome
+    first = saved["receipts"][logs[0]["call_id"]]
     if outcome != "partial":
         assert logs[1]["retry_of"] == logs[0]["call_id"]
+        assert first["error"]
+        if outcome == "timeout":
+            assert "TimeoutError" in first["error"]
+        else:
+            assert first["payload"]["source_status"] == "failed"
+        assert saved["receipts"][logs[1]["call_id"]]["payload"]["source_status"] == "complete"
     else:
+        assert first["error"] is None
+        assert first["payload"]["source_status"] == "partial"
+        observations = first["payload"]["observations"]
+        assert len(observations) == 1
+        assert observations[0]["evidence_id"] in saved["state"]["evidence"]
         assert saved["completeness"] == "partial"
         assert any(
             row["source_status"] == "partial" for row in saved["state"]["tool_receipts"].values()

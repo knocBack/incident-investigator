@@ -1,0 +1,114 @@
+{
+  "version": "cases.v1",
+  "family": "traffic_overload",
+  "culprit_service": "checkout",
+  "mechanism_keywords": [
+    "retry|retries",
+    "amplif|overload|saturat|attempt"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "checkout",
+      "predicates": {
+        "body": {
+          "regex": "retry without backoff"
+        }
+      }
+    },
+    {
+      "source": "metrics",
+      "service": "checkout",
+      "predicates": {
+        "name": {
+          "eq": "logical_request_rate"
+        },
+        "value": {
+          "eq": 10
+        }
+      }
+    },
+    {
+      "source": "metrics",
+      "service": "checkout",
+      "predicates": {
+        "name": {
+          "eq": "inventory_attempt_rate"
+        },
+        "value": {
+          "eq": 50
+        }
+      }
+    },
+    {
+      "source": "changes",
+      "service": "checkout",
+      "predicates": {
+        "changes": {
+          "contains": {
+            "key": "max_attempts"
+          }
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "checkout",
+        "predicates": {
+          "body": {
+            "regex": "retry without backoff"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "metrics",
+        "service": "checkout",
+        "predicates": {
+          "name": {
+            "eq": "logical_request_rate"
+          },
+          "value": {
+            "eq": 10
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "metrics",
+        "service": "checkout",
+        "predicates": {
+          "name": {
+            "eq": "inventory_attempt_rate"
+          },
+          "value": {
+            "eq": 50
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "changes",
+        "service": "checkout",
+        "predicates": {
+          "changes": {
+            "contains": {
+              "key": "max_attempts"
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "external demand",
+    "database contention"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review."
+}

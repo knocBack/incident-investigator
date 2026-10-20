@@ -2,6 +2,7 @@
 Evaluator checks retain those failures and distinguish provenance from semantics.
 """
 
+import json
 from argparse import Namespace
 from copy import deepcopy
 from decimal import Decimal
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from incident_investigator.grading.budget import BoundedModel, SpendGuard, price_bound
 from incident_investigator.grading.grader import FAMILIES, expectation, grade, grade_run, matches
-from incident_investigator.grading.suite import _pass_metrics, run_suite
+from incident_investigator.grading.suite import _pass_metrics, leaderboard, run_suite
 from incident_investigator.lab.app import MemoryTelemetrySink, create_app
 from incident_investigator.models import ModelCallError, ScriptedModel
 
@@ -113,6 +114,53 @@ def test_empty_is_not_perfect_grounding_and_missing_result_is_no_report(tmp_path
     assert (tmp_path / "grade.md").exists()
 
 
+def test_leaderboard_keeps_measured_grounding_when_an_attempt_has_no_hypotheses(tmp_path):
+    # Missing single-agent hypotheses previously hid all measured grounding in a group.
+    grades = []
+    for system in ("multi", "single"):
+        for variant in ("supported", "unsupported", "no_report"):
+            r = result()
+            r.update(system=system, graph="staged", status="completed")
+            if variant == "unsupported":
+                r["hypotheses"][0]["supporting_evidence"] = []
+            elif variant == "no_report":
+                r.update(hypotheses=[], report=None, status="failed")
+            grades.append(grade(r, expectation("bad_configuration")))
+    data = leaderboard(grades, tmp_path)
+    assert json.loads((tmp_path / "leaderboard.json").read_text()) == data
+    for row in data["models"]:
+        assert row["mean_grounding"] == 0.5
+        assert (row["grounding_measured"], row["grounding_total"]) == (2, 3)
+        assert row["execution_failures"] == 1
+        metric = row["faults"]["bad_configuration"]
+        assert metric["grounding"] == 0.5
+        assert (metric["grounding_measured"], metric["grounding_total"]) == (2, 3)
+        assert metric["execution_failures"] == 1
+    markdown = (tmp_path / "leaderboard.md").read_text()
+    assert "## Reliability outcomes" not in markdown
+    assert markdown.count("0.5 (2/3)") == 4
+    assert markdown.count("Execution failures") == 2
+    assert "| multi | staged | primary | unknown | 3 | 1 |" in markdown
+    assert "| bad_configuration | primary | single | unknown | 3 | 1 |" in markdown
+    empty = leaderboard([grades[-1]], tmp_path / "unmeasured")["models"][0]
+    assert empty["mean_grounding"] is None and empty["grounding_measured"] == 0
+    assert "unknown (0/1)" in (tmp_path / "unmeasured" / "leaderboard.md").read_text()
+
+
+def test_leaderboard_reliability_columns_apply_only_to_the_matching_variant(tmp_path):
+    grades = []
+    for system in ("multi", "single"):
+        for case in ("reliability-01", "reliability-02"):
+            g = grade(result(), expectation(case))
+            g.update(system=system, suite_attempt={"fault": case})
+            grades.append(g)
+    leaderboard(grades, tmp_path)
+    markdown = (tmp_path / "leaderboard.md").read_text()
+    for system in ("multi", "single"):
+        assert f"| {system} | reliability-01 | 0 / 0 / 1 | 0 / 1 | - |" in markdown
+        assert f"| {system} | reliability-02 | - | - | 0 / 1 |" in markdown
+
+
 def test_future_citation_and_repeated_queries():
     r = result()
     r["state"]["cutoff"] = "2026-01-01T00:00:00Z"
@@ -208,7 +256,6 @@ async def test_guard_reservations_are_atomic_under_concurrency():
 
 
 async def test_429_releases_bounded_reservation():
-
     class Adapter:
         def model_for_role(self, role):
             return "test/model"

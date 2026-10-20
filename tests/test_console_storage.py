@@ -371,8 +371,20 @@ def test_fault_discovery_and_catalog_contract(tmp_path):
         MemoryEvalCatalog(definitions, injectable=["new-fault", "lab-only"]),
     ):
         assert catalog.faults() == [
-            {"id": "lab-only", "injectable": True, "evaluable": False, "version": "lab registry"},
-            {"id": "new-fault", "injectable": True, "evaluable": True, "version": "test.v2"},
+            {
+                "id": "lab-only",
+                "case_set": "primary",
+                "injectable": True,
+                "evaluable": False,
+                "version": "lab registry",
+            },
+            {
+                "id": "new-fault",
+                "case_set": "primary",
+                "injectable": True,
+                "evaluable": True,
+                "version": "test.v2",
+            },
         ]
         result = catalog.expected("new-fault")
         result["answer"] = "changed"
@@ -483,10 +495,13 @@ def test_real_cli_job_stream_and_default_workspace(tmp_path):
         assert suite_metrics(attempts, 1)[0]["n"] == 1
         page = client.get(f"/suites/{grading_suite['id']}?k=1")
         assert page.status_code == 200
-        assert "1 / 0" in page.text and "0.000" in page.text
+        assert "0 / 1" in page.text and "0.000" in page.text
         assert "No runs found" not in page.text
         assert f"/runs/{run['id']}" in page.text
-        comparison = client.get("/compare", params={"kind": "suites", "left": grading_suite["id"]})
+        comparison = client.get(
+            "/compare",
+            params={"kind": "suites", "left": grading_suite["id"], "right": grading_suite["id"]},
+        )
         assert comparison.status_code == 200
         import re
 
@@ -536,3 +551,40 @@ def test_unfinished_run_keeps_source_and_metadata(repo):
     with TestClient(create_console(repo)) as client:
         assert "http://127.0.0.1:6006/projects/project/traces/live-trace" in client.get("/").text
         assert "Full frozen input retained" in client.get(f"/runs/{run['id']}?tab=evidence").text
+
+
+def test_m5_cases_and_system_choices_reach_cli_and_leaderboard(repo, tmp_path):
+    ids = {
+        fault["id"] for fault in repo.catalog.faults() if fault["injectable"] and fault["evaluable"]
+    }
+    assert {
+        "case-02",
+        "case-04",
+        "case-06",
+        "case-08",
+        "case-10",
+        "reliability-01",
+        "reliability-02",
+    } <= ids
+    command, _ = build_command(
+        RunRequest(faults=["case-04"], system="both"), repo, "paired", root=tmp_path
+    )
+    parsed = cli.build_parser().parse_args(command[4:])
+    assert parsed.system == "both" and parsed.faults == "case-04" and parsed.set == "primary"
+    rows = suite_metrics(
+        [
+            {
+                "fault": "case-04",
+                "model": "scripted",
+                "graph": "staged",
+                "system": system,
+                "verdict": "correct",
+            }
+            for system in ("multi", "single")
+        ],
+        1,
+    )
+    assert {row["system"] for row in rows} == {"multi", "single"}
+    with TestClient(create_console(repo)) as client:
+        panel = client.get("/run").text
+        assert 'name="system"' in panel and 'value="single"' in panel

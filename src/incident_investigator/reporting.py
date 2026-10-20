@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from incident_investigator.contracts import PAYLOADS
-from incident_investigator.graph_config import recorded_graph
+from incident_investigator.graph_config import recorded_graph, recorded_system
 from incident_investigator.sources.loader import CaseSnapshot
 
 
@@ -40,7 +40,11 @@ def retain_snapshot(snapshot: CaseSnapshot, out: Path) -> None:
 def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
     c, inbox = state["control"], state["inbox"]
     usage = {}
-    for role in PAYLOADS:
+    for role in (
+        ["single"]
+        if recorded_system(c.get("system"), c.get("graph")) == "single"
+        else [r for r in PAYLOADS if r != "single"]
+    ):
         calls = [call for call in c["calls"].values() if call["role"] == role]
         rows = [inbox.get(call["call_id"], {}) for call in calls]
         model_rows = [inbox.get(call["call_id"], {}) for call in calls if call["kind"] == "model"]
@@ -63,12 +67,15 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         }
     reasoning = c["tasks"].get(c["hypothesis_revision"], {}).get("result") or {}
     report = c["tasks"].get(c["report_task"], {}).get("result") or {}
+    if recorded_system(c.get("system"), c.get("graph")) == "single":
+        report = report.get("report", {})
     result = {
         "schema_version": "m3.v1",
         "run_id": c["run_id"],
         "launch_id": os.environ.get("II_LAUNCH_ID"),
         "case_id": c["case_id"],
         "graph": recorded_graph(c.get("graph")),
+        "system": recorded_system(c.get("system"), c.get("graph")),
         "dataset_digest": snapshot.dataset_digest,
         "revision": c["revision"],
         "status": c["status"],
