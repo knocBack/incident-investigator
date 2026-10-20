@@ -455,8 +455,8 @@ def test_paired_suite_explains_progress_timeout_cost_and_grade_conflicts(repo, t
     with TestClient(create_console(repo, jobs=jobs)) as client:
         suite = repo.runs.suites()[0]
         page = client.get(f"/suites/{suite['id']}").text
-        assert "Neither system achieved a correct final verdict" in page
-        assert "Multi retained a hypothesis while the other retained none" in page
+        assert "Provider errors affected these attempts" in page
+        assert "not a fair comparison of diagnosis quality" in page
         assert (
             "stopped during reporting; provider HTTP 502; retained a high-confidence hypothesis"
             in page
@@ -762,3 +762,196 @@ def test_missing_attempt_has_final_skip_reason_and_identifiable_callout(repo, st
             assert "Single has no retained attempt; skipped: other model skip." in page
             assert "Single has no retained attempt; skipped: variant cap refused." in page
         assert "Phoenix · live detailed view for agent traces" in client.get("/run").text
+
+
+def test_provider_limited_comparison_counts_request_errors_separately(repo):
+    store = repo.artifacts
+    store.save_json(
+        "suites/provider/batch.json", {"systems": ["multi", "single"], "faults": ["case-02"]}
+    )
+    store.save_json("suites/provider/leaderboard.json", {"models": []})
+    for system in ("multi", "single"):
+        store.save_json(
+            f"suites/provider/{system}/result.json",
+            {
+                "run_id": system,
+                "system": system,
+                "status": "completed",
+                "models": {system: "test/model"},
+                "completeness": "partial" if system == "multi" else "complete",
+                "state": {"calls": {}},
+            },
+        )
+        store.save_json(
+            f"suites/provider/{system}/grade.json",
+            {
+                "run_id": system,
+                "family": "case-02",
+                "verdict": "inconclusive" if system == "multi" else "correct",
+            },
+        )
+        if system == "multi":
+            store.write(
+                f"suites/provider/{system}/trace.jsonl",
+                (
+                    "\n".join(
+                        json.dumps(
+                            {
+                                "event": "model_call",
+                                "call_id": role,
+                                "role": role,
+                                "outcome": "ModelCallError: OpenRouter HTTP 502",
+                            }
+                        )
+                        for role in ("observability", "dependency", "reasoning")
+                    )
+                    + "\n"
+                ).encode(),
+            )
+    repo.runs.refresh()
+    suite = repo.runs.suites()[0]
+    with TestClient(create_console(repo)) as client:
+        page = client.get(f"/suites/{suite['id']}").text
+        assert "multi: provider HTTP 502 on 3 roles" in page
+        assert "not a fair comparison of diagnosis quality" in page
+        assert "Single achieved a higher" not in page
+        assert "Execution failures count runs that stopped without completing reporting" in page
+        assert "Model-call errors" in page and "<span>3</span>" in page
+        assert "<span>Execution failures</span><span>0</span>" in page
+        from incident_investigator.console_views import present_run, suite_metrics, system_metrics
+
+        rows = [present_run(r, store) for r in repo.runs.runs()]
+        heads = system_metrics({}, rows, 1)
+        assert next(h for h in heads if h["system"] == "multi")["model_call_errors"] == 3
+        assert next(h for h in heads if h["system"] == "single")["model_call_errors"] == 0
+        incident = next(h for h in suite_metrics(rows, 1) if h["system"] == "multi")
+        assert incident["model_call_errors"] == 3 and incident["execution_failures"] == 0
+
+
+@pytest.mark.parametrize("verdict", ["inconclusive", "no_report", "partial"])
+def test_grade_top_line_explains_the_saved_evidence_failure(repo, verdict):
+    store = repo.artifacts
+    store.save_json(
+        "runs/g/result.json",
+        {
+            "run_id": "g",
+            "diagnosis": "inconclusive",
+            "hypotheses": [{"statement": "A tentative cause"}],
+        },
+    )
+    grade = {
+        "run_id": "g",
+        "family": "bad_configuration",
+        "verdict": verdict,
+        "diagnosis_checks": {
+            "culprit_service": True,
+            "mechanism": True,
+            "key_evidence_cited": False,
+        },
+    }
+    store.save_json("runs/g/grade.json", grade)
+    before = store.read("runs/g/grade.json")
+    repo.runs.refresh()
+    with TestClient(create_console(repo)) as client:
+        page = client.get(f"/runs/{repo.runs.runs()[0]['id']}?tab=grade").text
+        assert 'id="grade-summary"' in page
+        assert "Cause named, but key evidence was not cited" in page
+        assert ("No final report was completed." in page) == (verdict == "no_report")
+    assert store.read("runs/g/grade.json") == before
+
+
+def test_single_system_summary_and_compare_selection_are_unambiguous(repo):
+    store = repo.artifacts
+    store.save_json("suites/one/batch.json", {"systems": ["multi"], "faults": ["case-02"]})
+    store.save_json("suites/one/leaderboard.json", {"models": []})
+    for ident, model in (("first", "test/one"), ("second", "test/two")):
+        store.save_json(
+            f"suites/one/{ident}/result.json",
+            {
+                "run_id": ident,
+                "models": {"requested": model},
+                "status": "completed",
+                "created": 1792514000,
+            },
+        )
+        store.save_json(
+            f"suites/one/{ident}/grade.json",
+            {"run_id": ident, "family": "case-02", "verdict": "inconclusive"},
+        )
+    repo.runs.refresh()
+    suite = repo.runs.suites()[0]
+    rows = repo.runs.runs()
+    with TestClient(create_console(repo)) as client:
+        assert "Single-system run: no comparison." in client.get(f"/suites/{suite['id']}").text
+        page = client.get("/compare").text
+        assert 'id="comparison-table"' not in page
+        assert "Choose both Left and Right" in page
+        labels = re.findall(r'<option value="[^"]+"[^>]*>(.*?)</option>', page, re.S)
+        assert any(
+            "test/one" in label and "2026-10-20" in label and "case-02" in label for label in labels
+        )
+        assert (
+            'id="comparison-table"'
+            not in client.get("/compare", params={"left": rows[0]["id"]}).text
+        )
+        assert (
+            'id="comparison-table"'
+            in client.get("/compare", params={"left": rows[0]["id"], "right": rows[1]["id"]}).text
+        )
+        assert "Start at" in client.get("/").text and "Run evaluation" in client.get("/").text
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_landing_and_resource_cells_distinguish_no_charge_from_unmeasured_usage(repo, unknown):
+    store = repo.artifacts
+    store.save_json("suites/cost/batch.json", {})
+    store.save_json("suites/cost/prices.json", {"test/free": prices(free=True)})
+    for ident, model in (("free", "test/free"), ("replay", "scripted")):
+        if unknown and ident == "free":
+            model = "test/unpriced"
+        store.save_json(
+            f"suites/cost/{ident}/result.json",
+            {
+                "run_id": ident,
+                "status": "completed",
+                "models": {"requested": model},
+                "usage": {
+                    "role": {
+                        "cost": "unknown",
+                        "known_cost": 0,
+                        "input_tokens": "unknown",
+                        "known_input_tokens": 799,
+                        "output_tokens": "unknown",
+                        "known_output_tokens": 17,
+                    }
+                },
+            },
+        )
+        store.save_json(
+            f"suites/cost/{ident}/budget.json",
+            {"state": {"charged": "0", "active": "0", "unknown_reserve": "0"}, "calls": []},
+        )
+    repo.runs.refresh()
+    with TestClient(create_console(repo)) as client:
+        page = client.get("/").text
+        stat = page.split("Total cost (USD)</label>")[1].split("</strong>")[0]
+        assert ("free model, no charge" in stat) == (not unknown)
+        assert ("at least USD 0.000000 (some calls unmeasured)" in stat) == unknown
+        assert "at least 799" in page and "some calls unmeasured" in page
+        assert "known 799" not in page
+        suite = repo.runs.suites()[0]
+        assert client.get(f"/suites/{suite['id']}").status_code == 200
+
+
+async def test_model_error_counts_use_receipts_when_older_trace_is_absent(repo):
+    from incident_investigator.console_views import present_run
+
+    repo.artifacts.save_json(
+        "runs/r/result.json",
+        {
+            "state": {"calls": {"c": {"kind": "model", "role": "single"}, "t": {"kind": "tool"}}},
+            "receipts": {"c": {"error": "TimeoutError:"}, "t": {"error": "source unavailable"}},
+        },
+    )
+    row = present_run({"prefix": "runs/r", "status": "failed"}, repo.artifacts)
+    assert row["model_call_errors"] == 1 and row["provider_issue"] == "request timed out"

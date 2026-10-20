@@ -71,6 +71,37 @@ def check_reasons(result, grade):
     }
 
 
+def grade_summary(result, grade):
+    verdict = grade.get("verdict", "ungraded")
+    if verdict == "ungraded":
+        return "Not graded yet."
+    if verdict == "correct":
+        return "Counted correct: the saved grade passed its required diagnosis and evidence checks."
+    checks = grade.get("diagnosis_checks", {})
+    prefix = "No final report was completed. " if verdict == "no_report" else ""
+    if checks.get("culprit_service") and checks.get("mechanism"):
+        if checks.get("key_evidence_cited") is False:
+            return (
+                prefix
+                + "Cause named, but key evidence was not cited, so this attempt is not counted correct."
+            )
+        if (
+            checks.get("required_evidence_groups") is False
+            or checks.get("support_references_valid") is False
+        ):
+            return (
+                prefix
+                + "Cause named, but required supporting evidence is missing or references are invalid; not counted correct."
+            )
+    if prefix:
+        return prefix + "Retained hypothesis checks do not replace a completed final report."
+    if checks.get("culprit_service") is False or checks.get("mechanism") is False:
+        return "The retained hypothesis did not pass the cause and mechanism checks; this attempt is not counted correct."
+    if result.get("diagnosis") == "inconclusive":
+        return "No final cause was committed; the saved grade did not count the uncertainty as a correct diagnosis."
+    return f"Saved verdict: {verdict}. The checks below explain why this attempt was not counted correct."
+
+
 def present_run(run, store, suite_prefix=None):
     """Explain persisted outcomes without changing execution status or grading."""
     if not run.get("prefix"):
@@ -81,6 +112,9 @@ def present_run(run, store, suite_prefix=None):
             "has_hypothesis": False,
             "free_no_charge": False,
             "progress": "unavailable",
+            "model_call_errors": None,
+            "provider_issue": "",
+            "scripted_no_charge": False,
         }
     result = store.json(run["prefix"] + "/result.json")
     saved = store.json(run["prefix"] + "/run.json")
@@ -105,6 +139,27 @@ def present_run(run, store, suite_prefix=None):
         for e in events
         if e.get("event") == "model_call" and e.get("outcome") not in {None, "received", "ok"}
     ]
+    if not errors:
+        errors = [
+            {
+                "outcome": receipt["error"],
+                "role": state.get("calls", {}).get(key, {}).get("role", "unknown"),
+            }
+            for key, receipt in result.get("receipts", {}).items()
+            if receipt.get("error") and state.get("calls", {}).get(key, {}).get("kind") == "model"
+        ]
+    provider_errors = [
+        e
+        for e in errors
+        if re.search(r"HTTP [45]\d\d|timeout", str(e.get("outcome", "")), re.IGNORECASE)
+    ]
+    provider_labels = list(dict.fromkeys(failure_label(str(e["outcome"])) for e in provider_errors))
+    provider_roles = {
+        e["role"] for e in provider_errors if e.get("role") and e["role"] != "unknown"
+    }
+    provider_issue = "; ".join(provider_labels)
+    if len(provider_roles) > 1:
+        provider_issue += f" on {len(provider_roles)} roles"
     task_errors = [
         f"{t.get('role', 'role')}: {failure_label(t['failure'])}"
         for t in state.get("tasks", {}).values()
@@ -187,12 +242,20 @@ def present_run(run, store, suite_prefix=None):
         "failure_explanation": explanation,
         "has_hypothesis": bool(hypotheses),
         "free_no_charge": free,
+        "scripted_no_charge": run.get("model") == "scripted"
+        and all(value is None or value == 0 for value in (run.get("cost"), run.get("known_cost"))),
+        "model_call_errors": len(errors)
+        if events or "receipts" in result or "calls" in state
+        else None,
+        "provider_issue": provider_issue,
         "progress": f"{stage} · {model_calls} model / {tool_calls} tool calls admitted",
     }
 
 
 def comparison_outcome(metrics):
     multi, single = metrics.get("multi"), metrics.get("single")
+    if len(metrics.get("systems", ())) == 1:
+        return "Single-system run: no comparison."
     if not multi or not single:
         provisional = metrics.get(
             "provisional", any(row.get("provisional", True) for row in (multi, single) if row)
@@ -221,6 +284,18 @@ def comparison_outcome(metrics):
         return " ".join(missing)
     if multi["provisional"] or single["provisional"]:
         return "Comparison is provisional while attempts or grades are pending."
+    provider_issues = [
+        f"{system}: {run['provider_issue']}"
+        for system, row in (("multi", multi), ("single", single))
+        for run in row["runs"]
+        if run.get("provider_issue") and run.get("verdict") != "correct"
+    ]
+    if provider_issues:
+        return (
+            "Provider errors affected these attempts: "
+            + "; ".join(dict.fromkeys(provider_issues))
+            + ". This is not a fair comparison of diagnosis quality; recorded verdicts and progress remain below."
+        )
     if multi["pass1"] != single["pass1"]:
         winner = "Multi" if multi["pass1"] > single["pass1"] else "Single"
         return f"{winner} achieved a higher correct-verdict rate on these retained attempts. Compare the outcomes below for causes and execution limits."
@@ -341,12 +416,14 @@ def suite_metrics(runs, k):
                     )
                 },
                 "free_no_charge": all(r.get("free_no_charge") for r in items),
+                "scripted_no_charge": all(r.get("scripted_no_charge") for r in items),
                 "runs": items,
                 "n": n,
                 "correct": correct,
                 "grounding": sum(grounded) / len(grounded) if grounded else None,
                 "grounding_measured": len(grounded),
                 "execution_failures": _failures(items),
+                "model_call_errors": total(items, "model_call_errors"),
                 "pass1": correct / n,
                 "passk": at,
                 "powerk": power,
@@ -403,6 +480,13 @@ def system_metrics(board, runs, k):
     for row in rows:
         system = recorded_system(row.get("system"), row.get("graph"))
         suite_kind = row.get("suite_kind", "primary")
+        outcomes = [
+            r
+            for r in runs
+            if r["system"] == system
+            and (r["case_set"] == "primary") == (suite_kind == "primary")
+            and r["model"] == ", ".join(sorted(set(row.get("models", {}).values())))
+        ]
         passes = [
             _pass_metrics(f["n"], f["correct"], min(k, f["n"]))
             for f in row.get("faults", {}).values()
@@ -414,13 +498,8 @@ def system_metrics(board, runs, k):
                 "system": system,
                 "suite_kind": suite_kind,
                 "models": row.get("models", {}),
-                "outcomes": [
-                    r
-                    for r in runs
-                    if r["system"] == system
-                    and (r["case_set"] == "primary") == (suite_kind == "primary")
-                    and r["model"] == ", ".join(sorted(set(row.get("models", {}).values())))
-                ],
+                "outcomes": outcomes,
+                "model_call_errors": total(outcomes, "model_call_errors"),
                 "passk": sum(p[0] for p in passes) / len(passes) if passes else None,
                 "powerk": sum(p[1] for p in passes) / len(passes) if passes else None,
             }
@@ -440,7 +519,10 @@ def summary(runs):
         "calls": sum(r["calls"] for r in runs),
         "events": sum(r["events"] for r in runs),
         "wall_seconds": total(runs, "wall_seconds"),
-        "free_no_charge": bool(runs) and all(r.get("free_no_charge") for r in runs),
+        "free_no_charge": bool(runs)
+        and any(r.get("free_no_charge") for r in runs)
+        and all(r.get("free_no_charge") or r.get("scripted_no_charge") for r in runs),
+        "scripted_no_charge": bool(runs) and all(r.get("scripted_no_charge") for r in runs),
     }
 
 

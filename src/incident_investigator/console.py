@@ -29,6 +29,7 @@ from incident_investigator.console_jobs import (
 )
 from incident_investigator.console_views import (
     check_reasons,
+    grade_summary,
     markdown,
     observations,
     paired_metrics,
@@ -242,6 +243,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             grade=run["grade"],
             expected=repo.catalog.expected(run["fault"]),
             check_reasons=check_reasons(result, run["grade"]),
+            grade_summary=grade_summary(result, run["grade"]),
             failure_explanation=run["failure_explanation"],
             run_profile=profile_name,
             review=review,
@@ -341,15 +343,24 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         refresh()
         if kind not in {"runs", "suites"}:
             raise HTTPException(422, "Compare runs or suites")
-        options = repo.runs.runs() if kind == "runs" else repo.runs.suites()
+        options = (
+            presented(repo.runs.runs())
+            if kind == "runs"
+            else [
+                {**s, "title": suite_title(s, repo.runs.runs({"suite": s["id"]}))}
+                for s in repo.runs.suites()
+            ]
+        )
         values = []
         for ident in (left, right):
             if kind == "runs":
-                values.append(repo.runs.get(ident))
+                values.append(next((r for r in options if r["id"] == ident), None))
             else:
                 selected = next((s for s in options if s["id"] == ident), None)
                 values.append(
-                    {**selected, **summary(repo.runs.runs({"suite": ident}))} if selected else None
+                    {**selected, **summary(presented(repo.runs.runs({"suite": ident})))}
+                    if selected
+                    else None
                 )
         fields = (
             (
@@ -364,7 +375,6 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
                 "input_tokens",
                 "output_tokens",
                 "cost",
-                "known_cost",
                 "wall_seconds",
             )
             if kind == "runs"
@@ -379,6 +389,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             left=left,
             right=right,
             fields=fields,
+            compare_ready=all(values),
         )
 
     @app.get("/run", response_class=HTMLResponse)

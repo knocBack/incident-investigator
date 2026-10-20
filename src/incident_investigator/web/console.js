@@ -108,6 +108,7 @@ if (form && form.dataset.enabled === "yes") {
   async function update() {
     const version = ++previewVersion;
     launch.disabled = true;
+    preview.textContent = "Preview out of date; refreshing from current settings...";
     profilePlaceholders();
     document.getElementById("reservation-estimate").textContent = form.elements.provider.value === "openrouter" ? "Checking model prices and initial-call reservation..." : "This replay makes no model calls.";
     document.getElementById("replay-note").hidden = form.elements.provider.value !== "scripted" || form.elements.command.value === "eval";

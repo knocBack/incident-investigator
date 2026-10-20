@@ -316,7 +316,7 @@ def test_console_separates_primary_reliability_and_unknown_resources(repo):
             "R1 not exercised",
             "R2 justified",
             "Multi vs single, per incident",
-            "known 0.010000",
+            "at least USD 0.010000",
             "pass@1",
             "Model / tool calls",
         ):
@@ -367,7 +367,7 @@ def test_suite_shows_recorded_headlines_and_incident_grounding_failures(repo):
         page = client.get(f"/suites/{suite['id']}?k=2").text
         assert page.index("System summary") < page.index("Primary accuracy")
         assert page.count("0.62") + page.count("0.63") >= 2  # Recorded 0.625, not recomputed 0.5.
-        assert "(2/3)" in page and "unknown (known 0.010000)" in page
+        assert "(2/3)" in page and "at least 0.010000 (some calls unmeasured)" in page
         assert "1 selected primary incident cases" in page
         assert "Execution failures" in page and "0.50 (1/1)" in page and "unknown (0/1)" in page
         assert "0.667" in page and "0.000" in page  # Mean pass@2 / pass^2 per incident.
@@ -405,7 +405,7 @@ def test_live_system_summary_is_provisional_without_a_leaderboard(repo):
     with TestClient(create_console(repo)) as client:
         page = client.get(f"/suites/{suite['id']}").text
         assert "Provisional: the suite is incomplete or still running" in page
-        assert "unknown (known 0.010000)" in page
+        assert "at least 0.010000 (some calls unmeasured)" in page
         assert "Open leaderboard.md" not in page
 
 

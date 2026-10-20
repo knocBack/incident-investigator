@@ -498,7 +498,10 @@ def test_real_cli_job_stream_and_default_workspace(tmp_path):
         assert "0 / 1" in page.text and "0.000" in page.text
         assert "No runs found" not in page.text
         assert f"/runs/{run['id']}" in page.text
-        comparison = client.get("/compare", params={"kind": "suites", "left": grading_suite["id"]})
+        comparison = client.get(
+            "/compare",
+            params={"kind": "suites", "left": grading_suite["id"], "right": grading_suite["id"]},
+        )
         assert comparison.status_code == 200
         import re
 
