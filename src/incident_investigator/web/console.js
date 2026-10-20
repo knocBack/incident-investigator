@@ -55,6 +55,32 @@ if (form && form.dataset.enabled === "yes") {
     preview = document.getElementById("command-preview");
   const launch = document.getElementById("launch-job");
   let launching = false;
+  function blockedFields(names) {
+    for (const input of form.querySelectorAll('[aria-invalid="true"]')) input.removeAttribute("aria-invalid");
+    const links = document.getElementById("run-error-fields");
+    links.replaceChildren();
+    for (const name of names) {
+      const input = form.elements.namedItem(name);
+      if (!input) continue;
+      input.id ||= name;
+      input.setAttribute("aria-invalid", "true");
+      const link = document.createElement("a");
+      link.href = "#" + input.id;
+      link.textContent = "Go to " + (input.labels[0]?.textContent.trim() || name);
+      link.className = "button small";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        input.scrollIntoView({ block: "center", behavior: "smooth" });
+        input.focus({ preventScroll: true });
+      });
+      links.append(link);
+    }
+  }
+  function profilePlaceholders() {
+    const option = form.elements.limits_profile.selectedOptions[0];
+    form.elements.call_seconds.placeholder = `${option.dataset.callSeconds} seconds (${option.value})`;
+    form.elements.wall_seconds.placeholder = `${option.dataset.wallSeconds} seconds (${option.value})`;
+  }
   function body() {
     const data = new FormData(form);
     return {
@@ -82,6 +108,7 @@ if (form && form.dataset.enabled === "yes") {
   async function update() {
     const version = ++previewVersion;
     launch.disabled = true;
+    profilePlaceholders();
     document.getElementById("reservation-estimate").textContent = form.elements.provider.value === "openrouter" ? "Checking model prices and initial-call reservation..." : "This replay makes no model calls.";
     document.getElementById("replay-note").hidden = form.elements.provider.value !== "scripted" || form.elements.command.value === "eval";
     try {
@@ -92,8 +119,9 @@ if (form && form.dataset.enabled === "yes") {
           `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
         document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
           ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
-          : `Estimated initial per-call reservation: USD ${Number(result.estimated_call_reservation).toFixed(8)}. This covers the initial prompt and output allowance; each run needs several calls.`;
+          : result.reservation_guide;
         error.textContent = result.launch_allowed ? "" : result.message;
+        blockedFields(result.blocked_fields || []);
         launch.disabled = launching || !result.launch_allowed;
       }
     } catch (e) {
@@ -101,6 +129,7 @@ if (form && form.dataset.enabled === "yes") {
         preview.textContent = "Resolve settings to preview the command.";
         document.getElementById("job-limit").textContent = "Job limit unavailable until settings are valid.";
         error.textContent = e.message;
+        blockedFields([]);
       }
     }
   }
@@ -140,6 +169,7 @@ if (output) {
     const job = JSON.parse(event.data);
     document.getElementById("job-status").textContent = job.status;
     document.getElementById("job-outcome").textContent = job.outcome || "";
+    document.getElementById("job-outcome").className = "callout " + (job.outcome_tone === "warning" ? "warning" : "info");
     output.replaceChildren();
     for (const line of (job.output || "").split("\n")) {
       const run = (job.runs || []).find(r => r.report_path && line.includes(r.report_path));

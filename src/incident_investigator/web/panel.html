@@ -28,6 +28,7 @@
                         </select>
                     </label>
                     <p class="caption">Choose cases below, or leave all unchecked to run the entire selected set.</p>
+                    <p class="caption">Reliability recovery and uncertainty results appear for the variants or all sets.</p>
                     <div class="fault-grid">
                         {% for fault in faults %}
                             <label class="fault-option">
@@ -71,11 +72,12 @@
                                 <option value="single">single</option>
                                 <option value="both">both (eval-suite)</option>
                             </select>
+                            <small>Multi: six collaborating roles. Single: one investigator. Both: compare them on the same snapshots and limits.</small>
                         </label>
                         <label class="field">
                             Limits profile<select name="limits_profile">
-                            {% for profile in profiles %}
-                                <option>{{ profile }}</option>
+                            {% for profile, limits in profiles.items() %}
+                                <option data-call-seconds="{{ limits.call_seconds }}" data-wall-seconds="{{ limits.wall_seconds }}">{{ profile }}</option>
                             {% endfor %}
                             </select>
                         </label>
@@ -86,7 +88,7 @@
                             Concurrency<input name="concurrency" type="number" min="1" max="8" value="2">
                         </label>
                         <label class="field">
-                            Suite cap USD<input name="budget_usd"
+                            Suite cap USD<input name="budget_usd" id="budget_usd" aria-describedby="reservation-estimate run-error"
        type="number"
        min="0"
        max="100"
@@ -94,13 +96,13 @@
        value="0">
                         </label>
                         <label class="field">
-                            Per-run cap USD<input name="run_budget_usd" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
+                            Per-run cap USD<input name="run_budget_usd" id="run_budget_usd" aria-describedby="reservation-estimate run-error" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
                         </label>
                         <label class="field">
-                            Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="Use profile">
+                            Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="{{ profiles['demo'].call_seconds }} seconds (demo)">
                         </label>
                         <label class="field">
-                            Run wall limit (seconds)<input name="wall_seconds" type="number" min=".001" max="3600" step="any" placeholder="Use profile">
+                            Run wall limit (seconds)<input name="wall_seconds" type="number" min=".001" max="3600" step="any" placeholder="{{ profiles['demo'].wall_seconds }} seconds (demo)">
                         </label>
                         <label class="field">
                             Max input tokens<input name="max_input_tokens" type="number" min="1" max="2000000" value="64000">
@@ -115,7 +117,6 @@
                         <input name="confirm_paid" type="checkbox">
                         <span>I explicitly authorize OpenRouter calls under this budget cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
                     </label>
-                    <p class="caption">Scripted is a deterministic coordination replay, not a diagnostic fallback. Without an installed replay file, an empty script fails boundedly and retains artifacts.</p>
                 </div>
             </div>
             <div>
@@ -124,6 +125,7 @@
                     <div class="command" id="command-preview">Choose settings to preview the command.</div>
                     <p class="caption" id="job-limit" role="status">Update the command to calculate the job limit.</p>
                     <p class="error-text" id="run-error" role="status"></p>
+                    <div class="actions" id="run-error-fields"></div>
                     <div class="actions">
                         <button class="button" type="button" id="preview-command">Update command</button>
                         <button class="button primary" id="launch-job" disabled>Launch</button>

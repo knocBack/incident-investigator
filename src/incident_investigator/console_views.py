@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from collections import Counter
 from datetime import datetime
 
@@ -17,6 +18,48 @@ from incident_investigator.workspace import total
 
 def pretty(value):
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
+def failure_label(reason):
+    if "output_truncated" in reason:
+        return "output truncated"
+    if match := re.search(r"HTTP (\d{3})", reason):
+        return f"provider HTTP {match[1]}"
+    if "timeout" in reason.lower():
+        return "request timed out"
+    return reason[:160] or "execution failed"
+
+
+def failure_explanation(reason):
+    if "output_truncated" in reason:
+        return "The model hit its output-token limit before finishing the report. Try another model or a larger output limit where supported."
+    return ""
+
+
+def check_reasons(result, grade):
+    reasons = {
+        "culprit_service": "The graded top hypothesis did not name the expected culprit service.",
+        "mechanism": "The top hypothesis did not describe all required parts of the expected failure mechanism.",
+        "key_evidence_cited": "The top hypothesis did not cite a retrieved observation matching the key evidence.",
+        "required_evidence_groups": "The top hypothesis did not cite observations from every required evidence group.",
+        "support_references_valid": "A supporting reference is missing, belongs to another dataset, or falls after the cutoff.",
+        "justified_uncertainty": "The report did not meet all requirements for justified uncertainty, including supporting observations, explicit gaps and follow-up evidence.",
+    }
+    if result.get("diagnosis") == "inconclusive":
+        reasons["culprit_service"] = (
+            "The final diagnosis is inconclusive; separately, the graded top hypothesis did not match the expected culprit service."
+        )
+    if not result.get("hypotheses"):
+        reasons["culprit_service"] = (
+            "No ranked hypothesis was available for the culprit-service check."
+        )
+    return {
+        key: reasons.get(
+            key, "The saved evaluator check did not pass; inspect the full grade below."
+        )
+        for key, passed in grade.get("diagnosis_checks", {}).items()
+        if not passed
+    }
 
 
 def markdown(text, run_id="", references=()):

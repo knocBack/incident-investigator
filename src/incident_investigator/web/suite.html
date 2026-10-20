@@ -30,7 +30,7 @@
         {% else %}<tr><td colspan="6">No primary attempts in this suite.</td></tr>{% endfor %}</tbody>
     </table></div></div>
     <h2>Reliability</h2>
-    <p class="caption">R1 requires an exercised fault and a bounded successful retrieval retry. Diagnostic correctness is separate. R2 measures justified uncertainty.</p>
+    <p class="caption">This table is for the variants or all sets. R1 requires an exercised fault and a bounded successful retrieval retry. Diagnostic correctness is separate. R2 measures justified uncertainty.</p>
     <div class="card flush"><div class="table-wrap"><table>
         <thead><tr><th>Variant / system</th><th>Diagnostic verdicts</th><th>R1 exercised / recovered</th><th>R1 not exercised</th><th>R1 recovered + correct</th><th>R2 justified</th></tr></thead>
         <tbody>{% for row in metrics if row.case_set == 'variants' %}

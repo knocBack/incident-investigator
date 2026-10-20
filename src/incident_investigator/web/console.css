@@ -414,6 +414,10 @@ th.number {
   background: #fff9e9;
   color: #805c19;
 }
+.field input[aria-invalid="true"] {
+  border: 2px solid #a53a32;
+  background: #fff5f3;
+}
 .report h1 {
   display: none;
 }

@@ -27,6 +27,8 @@ from incident_investigator.console_jobs import (
     job_plan,
 )
 from incident_investigator.console_views import (
+    check_reasons,
+    failure_explanation,
     markdown,
     observations,
     paired_metrics,
@@ -175,6 +177,16 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             ]
         review = repo.artifacts.json(f"reviews/{ident}/human-rubric.json")
         trace = artifact(run, "phoenix.json")
+        selected_suite = next((s for s in repo.runs.suites() if s["id"] == run["suite"]), {})
+        profile_name = selected_suite.get("batch", {}).get("limits_profile") or repo.artifacts.json(
+            f"jobs/{run.get('launch_id')}/job.json"
+        ).get("limits_profile")
+        if not profile_name:
+            saved_limits = state.get("limits") or artifact(run, "run.json").get("limits")
+            profile_name = next(
+                (name for name, limits in PROFILES.items() if limits.model_dump() == saved_limits),
+                "unavailable",
+            )
         if trace.get("url"):
             from incident_investigator.telemetry.tracing import local_url
 
@@ -191,6 +203,13 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             report=markdown(text, ident, refs),
             grade=run["grade"],
             expected=repo.catalog.expected(run["fault"]),
+            check_reasons=check_reasons(result, run["grade"]),
+            failure_explanation=failure_explanation(
+                result.get("stop_reason")
+                or run["grade"].get("process", {}).get("stop_reason")
+                or ""
+            ),
+            run_profile=profile_name,
             review=review,
             telemetry=observations(rows, request.query_params),
             frozen=frozen is not None,

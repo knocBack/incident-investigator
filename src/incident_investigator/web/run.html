@@ -6,7 +6,7 @@
         <div>
             <span class="eyebrow">{{ run.suite_name or 'Investigation' }} / {{ run.run_id[:8] }}</span>
             <h1>{{ run.fault }}</h1>
-            <p class="subtitle">{{ run.model or 'unknown model' }} · {{ run.system }} · {{ run.case_set }} · {{ run.graph }} · {{ run.case }}</p>
+            <p class="subtitle">{{ run.model or 'unknown model' }} · {{ run.system }} · {{ run.case_set }} · {{ run.graph }} · Profile {{ run_profile }}</p>
         </div>
         <div class="actions">{{ m.badge(run.verdict) }} {{ m.badge(run.status) }}{% if trace.url %}
             <a class="button small"
@@ -23,6 +23,7 @@
 <p class="page-note">{{ run.location }} · Cost USD {{ m.value(run.cost) }} · {{ run.calls }} calls · {{ run.events }} trace events · wall {{ m.value(run.wall_seconds) }}s</p>
 {% if run.model == 'scripted' %}<div class="callout info">Canned pipeline replay for testing the console. It uses fixed responses; inconclusive is expected.</div>{% endif %}
 {% if run.status in ['unfinished', 'running'] %}<div class="callout info">This investigation is still running. The report is being prepared; refresh after completion, watch the job, or open captured Phoenix traces.</div>{% endif %}
+{% if failure_explanation %}<div class="callout warning">{{ failure_explanation }}</div>{% endif %}
 <div class="tabs">
     {% for name in ['report','grade','rubric','evidence'] %}
         <a class="button {% if name == tab %}primary{% endif %}"
@@ -41,12 +42,13 @@
         <div class="card">
             <span class="eyebrow">Actual diagnosis</span>
             <h2>{{ run.verdict }}</h2>
+            {% if result.get('diagnosis') == 'inconclusive' %}<p class="caption">The final diagnosis is inconclusive: no final cause was committed. Confidence on an individual ranked hypothesis does not override that outcome.</p>{% endif %}
             {% for h in result.get('hypotheses',[]) %}
                 <p>{{ h.statement }}</p>
             {% endfor %}
             {% for check,passed in grade.get('diagnosis_checks',{}).items() if check != 'justified_uncertainty' or (grade.get('reliability') or {}).get('kind') == 'uncertainty' %}
                 <div class="check-row">
-                    <span>{{ check }}</span>{{ m.badge('pass' if passed else 'fail') }}
+                    <span>{{ check }}{% if not passed %}<small>{{ check_reasons[check] }}</small>{% endif %}</span>{{ m.badge('pass' if passed else 'fail') }}
                 </div>
             {% endfor %}
             <h3>Retrieved key evidence</h3>

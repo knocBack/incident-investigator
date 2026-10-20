@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from incident_investigator.console_preflight import LaunchPreflight
+from incident_investigator.console_views import failure_explanation, failure_label
 from incident_investigator.contracts import PROFILES
 from incident_investigator.graph_config import DEFAULT_GRAPH
 from incident_investigator.storage import FileEvalCatalog, Repositories
@@ -205,6 +206,7 @@ def job_plan(request: RunRequest, repo: Repositories) -> dict:
         "attempts": attempts,
         "concurrency": concurrency,
         "wall_seconds": wall,
+        "call_seconds": request.call_seconds or PROFILES[request.limits_profile].call_seconds,
         "timeout_seconds": math.ceil(duration + max(60, duration * 0.1)),
         "termination_grace_seconds": TERMINATION_GRACE_SECONDS,
     }
@@ -237,6 +239,7 @@ class Jobs:
                 "command": display_command(argv),
                 "plan": job_plan(request, self.repo),
                 "provider": request.provider,
+                "limits_profile": request.limits_profile,
             },
         )
         self.tasks[ident] = asyncio.create_task(self.execute(ident, argv, output))
@@ -277,6 +280,22 @@ class Jobs:
         return metadata
 
     def outcome(self, metadata):
+        failed = [
+            r
+            for r in metadata["runs"]
+            if r["status"] in {"failed", "resource_exhausted", "interrupted"}
+        ]
+        failures = []
+        for run in failed:
+            reason = run.get("grade", {}).get("process", {}).get("stop_reason")
+            if not reason:
+                reason = self.repo.artifacts.json(run["prefix"] + "/result.json").get("stop_reason")
+            failures.append(f"{run['system']}: {failure_label(reason or '')}")
+        metadata["outcome_tone"] = (
+            "warning"
+            if failed or metadata["status"] in {"stopped", "failed", "interrupted"}
+            else "info"
+        )
         skipped, budget_stops, zero_spend = [], [], True
         for suite in metadata["suites"]:
             prefix = suite["prefix"]
@@ -327,10 +346,22 @@ class Jobs:
             metadata["outcome"] = (
                 "No new reports retained. Open the comparison and job log for the outcome."
             )
+        if failures:
+            metadata["outcome"] = (
+                f"{len(failed)} of {len(metadata['runs'])} runs failed: {'; '.join(failures)}. "
+                + metadata["outcome"]
+            )
+            if any("output truncated" in failure for failure in failures):
+                metadata["outcome"] += " " + failure_explanation("output_truncated")
         if metadata["replay"]:
             metadata["outcome"] += (
                 " Canned pipeline replay for testing the console; inconclusive is expected."
             )
+        metadata["outcome_tone"] = (
+            "warning"
+            if failed or metadata["status"] in {"stopped", "failed", "interrupted"}
+            else "info"
+        )
 
     async def execute(self, ident: str, argv: list[str], output: Path):
         store = self.repo.artifacts

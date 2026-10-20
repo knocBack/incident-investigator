@@ -64,10 +64,21 @@ def test_preflight_blocks_both_caps_before_start_and_allows_free_calls(repo, tmp
         result = preview.json()
         assert not result["launch_allowed"] and float(result["estimated_call_reservation"]) > 0
         assert "Suite cap USD" in result["message"]
+        assert result["blocked_fields"] == ["budget_usd"]
+        assert float(result["minimum_cap"]) >= float(result["estimated_call_reservation"])
+        assert result["max_model_calls"] == 40
+        assert float(result["rough_run_reservation"]) >= 40 * float(
+            result["estimated_call_reservation"]
+        )
+        assert (
+            "minimum cap" in result["reservation_guide"]
+            and "up to 40 model calls" in result["reservation_guide"]
+        )
         assert client.post("/api/jobs", json=body, headers=token).status_code == 422
         body.update(budget_usd="1", run_budget_usd="0")
         result = client.post("/api/preview", json=body, headers=token).json()
         assert not result["launch_allowed"] and "Per-run cap USD" in result["message"]
+        assert result["blocked_fields"] == ["run_budget_usd"]
         assert client.post("/api/jobs", json=body, headers=token).status_code == 422
         assert not launched
         body.update(model_id="test/replay:free", budget_usd="0")
@@ -78,6 +89,12 @@ def test_preflight_blocks_both_caps_before_start_and_allows_free_calls(repo, tmp
         page = client.get("/run").text
         assert "How it works" in page and "Watch this job" in page
         assert "canned pipeline replay" in page and "inconclusive is expected" in page
+        assert 'id="budget_usd"' in page and 'id="run_budget_usd"' in page
+        assert 'id="run-error-fields"' in page
+        assert "Without an installed replay file" not in page
+        assert "Multi: six collaborating roles" in page and "Single: one investigator" in page
+        assert "same snapshots and limits" in page
+        assert 'data-call-seconds="90.0"' in page and 'data-wall-seconds="1200.0"' in page
 
 
 @pytest.mark.parametrize("system", ["multi", "single"])
@@ -222,3 +239,105 @@ def test_live_report_explains_pending_output_and_links_back_to_job(repo):
         page = client.get(f"/runs/{run['id']}?tab=report").text
         assert "This investigation is still running" in page and "report is being prepared" in page
         assert 'href="/jobs/live-job"' in page and "Watch job" in page
+
+
+def test_mixed_job_warns_about_run_failure_and_explains_truncation(repo, tmp_path):
+    store = repo.artifacts
+    store.save_json("jobs/mixed/job.json", {"id": "mixed", "status": "completed", "exit_code": 0})
+    store.save_json(
+        "suites/mixed/batch.json", {"launch_id": "mixed", "limits_profile": "demo-live"}
+    )
+    for system in ("multi", "single"):
+        store.save_json(
+            f"suites/mixed/{system}/result.json",
+            {
+                "run_id": system,
+                "launch_id": "mixed",
+                "system": system,
+                "case_id": "lab-demo",
+                "status": "failed" if system == "single" else "completed",
+                "stop_reason": "output_truncated" if system == "single" else None,
+            },
+        )
+    jobs = Jobs(repo, tmp_path)
+    job = jobs.get("mixed")
+    assert (
+        job["exit_code"] == 0 and "1 of 2 runs failed: single: output truncated" in job["outcome"]
+    )
+    assert "output-token limit before finishing the report" in job["outcome"]
+    assert job["outcome_tone"] == "warning"
+    with TestClient(create_console(repo, jobs=jobs)) as client:
+        page = client.get("/jobs/mixed").text
+        assert 'class="callout warning"' in page and "1 of 2 runs failed" in page
+        failed = next(r for r in job["runs"] if r["system"] == "single")
+        report = client.get(f"/runs/{failed['id']}").text
+        assert "Try another model or a larger output limit" in report
+        assert "Profile demo-live" in report and "· lab-demo" not in report
+
+
+def test_grade_reasons_explain_saved_failures_without_modifying_the_grade(repo):
+    from incident_investigator.console_views import check_reasons
+
+    r = {
+        "run_id": "uncertain",
+        "status": "completed",
+        "diagnosis": "inconclusive",
+        "hypotheses": [{"statement": "A tentative service hypothesis", "confidence": "high"}],
+    }
+    checks = {
+        name: False
+        for name in (
+            "culprit_service",
+            "mechanism",
+            "key_evidence_cited",
+            "required_evidence_groups",
+            "support_references_valid",
+            "justified_uncertainty",
+        )
+    }
+    g = {
+        "run_id": "uncertain",
+        "verdict": "inconclusive",
+        "family": "bad_configuration",
+        "diagnosis_checks": checks,
+    }
+    store = repo.artifacts
+    store.save_json("runs/uncertain/result.json", r)
+    store.save_json("runs/uncertain/grade.json", g)
+    before = store.read("runs/uncertain/grade.json")
+    reasons = check_reasons(r, g)
+    assert set(reasons) == set(checks) and all(reasons.values())
+    assert "inconclusive" in reasons["culprit_service"]
+    repo.runs.refresh()
+    run = repo.runs.runs()[0]
+    with TestClient(create_console(repo)) as client:
+        page = client.get(f"/runs/{run['id']}?tab=grade").text
+        assert "no final cause was committed" in page and "does not override" in page
+        for name in set(checks) - {"justified_uncertainty"}:
+            assert reasons[name] in page
+        assert "The report did not meet all requirements for justified uncertainty" not in page
+    assert store.read("runs/uncertain/grade.json") == before
+
+
+def test_job_profile_fallback_and_effective_limit_preview(repo, tmp_path):
+    store = repo.artifacts
+    store.save_json("jobs/one/job.json", {"limits_profile": "demo-live"})
+    store.save_json(
+        "runs/one/result.json", {"run_id": "one", "launch_id": "one", "case_id": "lab-demo"}
+    )
+    repo.runs.refresh()
+    run = repo.runs.runs()[0]
+    with TestClient(create_console(repo, jobs=Jobs(repo, tmp_path))) as client:
+        page = client.get(f"/runs/{run['id']}").text
+        assert "Profile demo-live" in page
+        token = headers(client)
+        preview = client.post(
+            "/api/preview", json={"limits_profile": "demo-live"}, headers=token
+        ).json()
+        assert preview["plan"]["call_seconds"] == 90 and preview["plan"]["wall_seconds"] == 1200
+        preview = client.post(
+            "/api/preview",
+            json={"limits_profile": "demo-live", "call_seconds": 180, "wall_seconds": 1800},
+            headers=token,
+        ).json()
+        assert preview["plan"]["call_seconds"] == 180 and preview["plan"]["wall_seconds"] == 1800

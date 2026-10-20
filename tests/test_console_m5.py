@@ -81,6 +81,7 @@ def test_job_limit_covers_the_selected_attempts_and_profiles(repo):
         "attempts": 10,
         "concurrency": 1,
         "wall_seconds": 1800,
+        "call_seconds": 30,
         "timeout_seconds": 19800,
         "termination_grace_seconds": 120,
     }

@@ -2,7 +2,7 @@
 {% block content %}
     <span class="eyebrow">CLI job {{ job.id }}</span>
     <h1 id="job-status">{{ job.status }}</h1>
-    <p class="callout info" id="job-outcome" role="status">{{ job.outcome }}</p>
+    <p class="callout {{ job.outcome_tone }}" id="job-outcome" role="status">{{ job.outcome }}</p>
     <div id="job-runs">
         {% for suite in job.suites %}<p><a class="button primary" href="/suites/{{ suite.id }}">Open comparison</a></p>{% endfor %}
         {% for run in job.runs %}<p><a class="button" href="/runs/{{ run.id }}?tab=report">Open report · {{ run.fault }} · {{ run.system }}</a></p>{% endfor %}

@@ -32,7 +32,12 @@ class LaunchPreflight:
 
     async def check(self, request, repo):
         if request.provider != "openrouter" or request.command == "eval":
-            return {"launch_allowed": True, "estimated_call_reservation": None, "message": ""}
+            return {
+                "launch_allowed": True,
+                "estimated_call_reservation": None,
+                "message": "",
+                "blocked_fields": [],
+            }
         from incident_investigator import cli
 
         try:
@@ -95,16 +100,37 @@ class LaunchPreflight:
                 if isinstance(exc, ValueError)
                 else "Cannot check the model's public prices. Check the model id and retry."
             )
-            return {"launch_allowed": False, "estimated_call_reservation": None, "message": message}
+            fields = (
+                ["max_input_tokens"]
+                if message.startswith("Raise Max input tokens")
+                else ["wall_seconds"]
+                if message.startswith("Raise Run wall limit")
+                else ["model_id"]
+            )
+            return {
+                "launch_allowed": False,
+                "estimated_call_reservation": None,
+                "message": message,
+                "blocked_fields": fields,
+            }
         blocked = []
         if amount(request.budget_usd) < bound:
             blocked.append("Suite cap USD")
         if request.run_budget_usd is not None and amount(request.run_budget_usd) < bound:
             blocked.append("Per-run cap USD")
         suggested = bound.quantize(amount("0.01"), rounding="ROUND_CEILING")
+        run_guide = (bound * limits.max_model_calls).quantize(
+            amount("0.01"), rounding="ROUND_CEILING"
+        )
         return {
             "launch_allowed": not blocked,
             "estimated_call_reservation": str(bound),
+            "minimum_cap": str(suggested),
+            "max_model_calls": limits.max_model_calls,
+            "rough_run_reservation": str(run_guide),
+            "blocked_fields": (["budget_usd"] if "Suite cap USD" in blocked else [])
+            + (["run_budget_usd"] if "Per-run cap USD" in blocked else []),
+            "reservation_guide": f"Each initial call reserves about USD {bound:.4f}, with a minimum cap of USD {suggested:.2f}; a run allows up to {limits.max_model_calls} model calls (roughly USD {run_guide:.2f} at this initial size), and later prompts and actual charges vary.",
             "message": f"Raise {' and '.join(blocked)} to at least USD {suggested:.2f} to fit an initial call. Budget for several calls per run."
             if blocked
             else "Initial calls fit the caps. Later calls may need larger reservations.",
