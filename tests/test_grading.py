@@ -152,7 +152,7 @@ def test_expectations_match_only_the_injected_lab_signature(family):
         )
 
 
-@pytest.mark.parametrize("graph", ["hub", "staged"])
+@pytest.mark.parametrize("graph", ["staged"])
 async def test_suite_scripted_real_lab_without_network(tmp_path, monkeypatch, graph):
     import httpx
 
@@ -230,7 +230,7 @@ async def test_429_releases_bounded_reservation():
     assert guard.snapshot()["active"] == "0" and guard.unknown == 0
 
 
-@pytest.mark.parametrize("graph", ["hub", "staged"])
+@pytest.mark.parametrize("graph", ["staged"])
 async def test_suite_parallel_jobs_have_separate_artifacts(tmp_path, graph):
     import asyncio
     import json
@@ -284,7 +284,7 @@ def test_price_bound_and_unpriced_fee():
         price_bound(info)
 
 
-@pytest.mark.parametrize("graph", ["hub", "staged"])
+@pytest.mark.parametrize("graph", ["staged"])
 async def test_suite_successful_script_is_reset_for_every_fault(tmp_path, graph):
     import json
 

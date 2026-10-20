@@ -7,7 +7,7 @@ description: Maintain incident-investigator evaluations when reproducing a faile
 
 Use this as a developer/evaluator workflow. Runtime investigation agents must never receive this skill, expected diagnoses, grader data, planning documents, or repository-reading tools.
 
-Read the relevant requirements in the [PRD](../../../docs/mvp-plan.md) and the relevant case or protocol in the [evaluation specification](../../../docs/evaluation-plan.md). Do not copy case answers into this skill. The goal is reliable investigation; the required baseline comparison does not require multi-agent superiority.
+Read the relevant requirements in the [product scope](../../../docs/requirements.md) and the relevant case or protocol in the [evaluation specification](../../../docs/evaluation-plan.md). Do not copy case answers into this skill. The goal is reliable investigation; the required baseline comparison does not require multi-agent superiority.
 
 ## Work from the observed failure
 

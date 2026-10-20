@@ -1,8 +1,8 @@
 # Incident and evaluation specification
 
-Status: incident definitions agreed on 2026-10-18; reliability acceptance, maintenance protocol, resume compatibility, and unknown-usage recovery coverage updated on 2026-10-19. Small feasibility probes are recorded in the HLD. No runnable fixtures, product test runner, agent implementation, or benchmark results are claimed.
+Status: accepted protocol for the ten primary incidents and two reliability variants. The current implementation has a separate five-family fault lab, grader and evaluation console. The paired fixtures and single-agent baseline are a separate change; the matched benchmark and comparison report are still pending. See [evaluation status](evaluation.md).
 
-Audience: dataset authors and human evaluators. This document includes expected answers. Never provide it, the MVP planning document, or evaluator labels to runtime agents or their retrieval tools. File naming alone does not enforce this boundary; implementation must enforce it.
+Audience: dataset authors and human evaluators. This document includes expected answers. Never provide it, design documents or evaluator labels to runtime agents or their retrieval tools. File naming alone does not enforce this boundary; implementation must enforce it.
 
 ## Shared scenario rules
 
@@ -185,14 +185,14 @@ Before any model runs:
 - Filter every tool by its supported arguments using actual observations. A narrower query must not magically reveal a prewritten conclusion.
 - Distinguish an empty complete query from a partial or unavailable source.
 - Enforce the observation cutoff, including deployment history and historical incidents. Do not leak future resolutions.
-- Retest a fixed source snapshot under two different execution wall-clock dates: the same queries/cutoff return the same visible observations. Exclude a later-available record even if its event time is earlier, and exclude a metric window extending beyond the cutoff. Changed snapshot content requires a new dataset identity; resume under a mismatch refuses before work. LLD-02 now specifies the tool/source contract; executable fixtures are still absent, so this remains planned acceptance.
+- Retest a fixed source snapshot under two different execution wall-clock dates: the same queries/cutoff return the same visible observations. Exclude a later-available record even if its event time is earlier, and exclude a metric window extending beyond the cutoff. Changed snapshot content requires a new dataset identity; resume under a mismatch refuses before work. The current loader/tool tests cover development snapshots; applying these checks to the paired benchmark fixtures remains part of the separate evaluation change.
 - Verify that faults are reproducible, reset between runs, and do not change the underlying incident data.
 - Verify that runtime inputs, registered tools, source loaders, and prompts cannot access evaluator labels or these documents. A filename convention is not a security boundary.
 - Verify citation provenance against evidence actually returned in that run.
 
 ## Runtime and engineering acceptance
 
-All deterministic reliability checks must pass. Once HLD/LLD is selected, use controlled local doubles and fixtures to verify these behaviors without relying on a particular model response:
+All deterministic reliability checks must pass. Use controlled local doubles and fixtures to verify these behaviors without relying on a particular model response:
 
 | Scenario | Required observation |
 | --- | --- |
@@ -212,11 +212,11 @@ All deterministic reliability checks must pass. Once HLD/LLD is selected, use co
 
 Demonstrate structured role exchange, critic-requested targeted evidence gathering, and hypothesis revision using controlled runtime tests and inspect recorded real-model runs. The two reliability variants retain their case-specific requirements, including recovery and justified uncertainty. Engineering checks alone do not establish model diagnosis quality. These tests are not additional application services or incident families.
 
-The [HLD feasibility record](hld.md#executed-feasibility-experiments--2026-10-19) describes smaller inline standard-library probes of merge, SQLite process-crash, budget-admission, and lock primitives. Their temporary test artifacts were removed. They are design evidence, not an implemented regression suite or a pass of the application acceptance scenarios above. No case/grader correction or new incident variant resulted from them.
+The runtime regression suite now covers parallel completion, bounded recovery, invocation locking, incompatible versions and unknown-call accounting. See [runtime contracts](lld.md) and `tests/test_reliability.py`. This protocol also defines broader benchmark acceptance; a passing development test is not evidence that the pending paired benchmark passed.
 
 ## Checkpoint validation process
 
-At every major accepted behavioral-design checkpoint or coherent implementation milestone, invoke the project-local [incident-evals skill](../.agents/skills/incident-evals/SKILL.md) together with this process, as required by `AGENTS.md`. This project rule extends the skill's failure-driven trigger: prospective contract checks need no observed failure and must not be presented as reproduced regressions. Save the accepted decisions first, then add or strengthen a few focused cases for changed contracts. Reuse existing coverage; routine wording/layout changes do not require new product cases or a forced case-count quota.
+At every major accepted behavioral-design checkpoint or coherent implementation milestone, invoke the project-local [incident-evals skill](../.agents/skills/incident-evals/SKILL.md) together with this process, under this maintenance protocol. This project rule extends the skill's failure-driven trigger: prospective contract checks need no observed failure and must not be presented as reproduced regressions. Save the accepted decisions first, then add or strengthen a few focused cases for changed contracts. Reuse existing coverage; routine wording/layout changes do not require new product cases or a forced case-count quota.
 
 Record each case's stable ID, contract/setup, observable expected outcome, validation method, execution status, commands/results when run, and blockers. Use deterministic runtime/tool checks for execution invariants and human review for semantic task quality. Run the actual implementation and runner when available; do not build a duplicate scheduler merely to claim the contracts were tested.
 
@@ -275,7 +275,7 @@ Setup: admitted rounds containing a new observation, a partial query becoming co
 - **Controls:** new observations or newly complete normalized-query coverage reset consecutive retrieval no-progress. Useful reanalysis is allowed within remaining limits but consumes round/call capacity without resetting retrieval progress.
 - **Adverse cases:** duplicates, repeated complete coverage, failed receipts, new task IDs, and rewritten prose do not reset progress. At the threshold close gathering and report reviewed findings/gaps if required work fits. Hard limits bound superficially novel but useless queries; invalid plans and retries still consume calls.
 - **Resume boundaries:** interrupt after admission and after a completed review, then resume repeatedly. Do not refund/reconsume admitted allowance or update progress twice for one completed review. Preserve unknown-usage reservations.
-- **Oracle:** saved round identities, consumed allowances, progress updates, and stop behavior match those events across restart. Specify exact query normalization and numeric settings during LLD before implementing this executable fixture; its current status remains planned.
+- **Oracle:** saved round identities, consumed allowances, progress updates, and stop behavior match those events across restart. Current normalization and runtime limits are documented in [tool contracts](tool-contracts.md) and [runtime contracts](lld.md); benchmark-specific verification remains pending.
 
 ### Task-level human review
 
@@ -308,9 +308,9 @@ Use the project-local [incident-evals skill](../.agents/skills/incident-evals/SK
 Run the ten primary incidents and both variants against the single-agent baseline and the multi-agent system.
 
 - Use the same underlying model/version and settings, registered tool implementations, visible observations, initial alert, cutoff, and per-run total limits. Compare system-wide budgets, not a full independent allowance for every specialist.
-- HLD-03 selects one iterative investigator for the baseline, reusing model/tool adapters, provenance validation, persistence/recovery, accounting, and output contracts. Use controlled runs to verify the same adapter settings, total allowances, retry accounting, and retrieved-evidence restrictions in both modes; baseline execution must not require the six-role chain. Record mode-specific task/round guards without granting extra per-role resource allowances.
+- The accepted design selects one iterative investigator for the baseline, reusing model/tool adapters, provenance validation, persistence/recovery, accounting, and output contracts. Use controlled runs to verify the same adapter settings, total allowances, retry accounting, and retrieved-evidence restrictions in both modes; baseline execution must not require the six-role chain. Record mode-specific task/round guards without granting extra per-role resource allowances.
 - Reset per-run state and fault conditions. Each system makes its own queries; do not give either system the other one's collected evidence or answers.
-- Select and record model/provider, settings, dataset/fixture/prompt/grader versions, actual budget values, run order, fault conditions, and repeat count before each evaluation batch. These remain runtime-design decisions; this checkpoint does not claim they are selected. Freeze them within a batch and preserve all attempts.
+- Select and record model/provider, settings, dataset/fixture/prompt/grader versions, actual budget values, run order, fault conditions, and repeat count before each evaluation batch. The CLI records current settings per batch; the matched benchmark configuration must be fixed separately before measurement. Freeze them within a batch and preserve all attempts.
 - Preserve configuration, structured outputs, tool results, task events, and actual provider-reported usage. Record missing usage as unknown, not zero.
 - Include failed attempts and retries in call/usage accounting. Keep wall-clock latency distinct from summed parallel task durations.
 - Report the ten primary cases together and individually. Report R1 recovery/fault exercise and R2 uncertainty separately.

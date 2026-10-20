@@ -1,13 +1,13 @@
-# LLD-03: demo role and coordination contracts
+# Role and coordination contracts
 
-M3 implements the B7/B8 six-role loop. Recovery hardening and public resume remain
-M4; baseline/evaluation remain M5. Existing accepted ownership and closure rules apply.
+The staged runtime implements the six-role loop with bounded follow-up and compatible
+checkpoint resume. The baseline and expanded evaluation suite remain a separate change.
 `contracts.py` supplies Pydantic schemas; unexpected fields are rejected.
 
 Every model emits either `tools {requests: [{name, arguments}]}` or
 `final {result: <role payload>}`. Only specialists may use retrieval tools. All
 identities, attempts, counters and envelopes are runtime-owned. Each task has one
-attempt (S3), bounded call retries, and one invalid-output correction turn.
+attempt with bounded call retries, and one invalid-output correction turn.
 
 | Role | Payload |
 | --- | --- |
@@ -24,12 +24,13 @@ receipts may establish gaps but never application causes. Reporting cannot chang
 the ranked hypotheses or perform retrieval. Recommendations are proposals, not
 claims that a fix was applied.
 
-The controller owns typed control state. Parallel role/call nodes return immutable
+The stage commit node owns typed control state. Parallel role/call nodes return immutable
 receipts only; identity-based reducers reject conflicting replay. Each Send executes
 one model/tool operation. Synchronous per-run SQLite checkpoints separate admission,
 raw receipt storage, and validation/acceptance. Inspect reads the derived result
 without invoking models or opening a writable checkpointer. Trace is a local audit
-export, not recovery authority. No public resume is claimed in M3.
+export, not recovery authority. Public resume retains the source, versions, original deadline and consumed allowances;
+see [runtime recovery](lld.md#durable-recovery).
 
 Initial plans must include both specialist roles. The whole specialist batch settles
 before Reasoning, including failed/inconclusive tasks. A reasoning task ID identifies

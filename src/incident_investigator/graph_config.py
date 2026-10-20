@@ -3,19 +3,14 @@
 from argparse import ArgumentParser
 from typing import Literal
 
-GraphVariant = Literal["staged", "hub"]
+GraphVariant = Literal["staged"]
 DEFAULT_GRAPH: GraphVariant = "staged"
-GRAPH_HELP = (
-    "staged (default): stage nodes and conditional edges; "
-    "hub: deprecated; removed if final evaluation shows no difference"
-)
+GRAPH_HELP = "staged: stage nodes and conditional edges (the only supported workflow)"
 
 
 def add_graph_argument(parser: ArgumentParser) -> None:
-    """Give every investigation CLI the same default and deprecation notice."""
-    parser.add_argument(
-        "--graph", choices=["staged", "hub"], default=DEFAULT_GRAPH, help=GRAPH_HELP
-    )
+    """Expose the recorded workflow name consistently across investigation commands."""
+    parser.add_argument("--graph", choices=["staged"], default=DEFAULT_GRAPH, help=GRAPH_HELP)
 
 
 def recorded_graph(value: str | None) -> str:

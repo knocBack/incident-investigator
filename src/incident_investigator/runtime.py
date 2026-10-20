@@ -212,7 +212,7 @@ class Investigation:
         faults: dict[str, FaultSelection] | None = None,
         graph: GraphVariant = DEFAULT_GRAPH,
     ) -> None:
-        if graph not in {"staged", "hub"}:
+        if graph != DEFAULT_GRAPH:
             raise ValueError(f"unknown graph: {graph}")
         self.snapshot, self.model, self.out, self.limits = snapshot, model, out, limits
         self.semaphore = semaphore
@@ -935,11 +935,7 @@ class Investigation:
         return {"inbox": {call.call_id: receipt}}
 
     def graph(self):
-        """Build the staged workflow by default; hub is a deprecated opt-in."""
-        if self.variant == "hub":
-            from incident_investigator.hub import build_hub_graph
-
-            return build_hub_graph(self)
+        """Build the checkpointed staged workflow."""
         from incident_investigator.staged import build_staged_graph
 
         return build_staged_graph(self)
@@ -992,7 +988,7 @@ async def investigate(
     from incident_investigator.reporting import export_report, retain_snapshot
     from incident_investigator.workspace import home, write_json
 
-    if graph not in {"hub", "staged"}:
+    if graph != DEFAULT_GRAPH:
         raise ValueError(f"unknown graph: {graph}")
     out = out if out is not None else home() / "runs"
     run_dir = Path(resume) if resume else out / identity()
