@@ -89,11 +89,17 @@ async def demo(args) -> Path:
 
 
 async def run(args) -> int:
-    if args.command == "demo":
+    if getattr(args, "resume", None):
+        if args.case or args.source:
+            raise ValueError("--resume uses the saved source; omit --case and --source")
+        runs = [await investigate(None, model(args), resume=args.resume)]
+    elif args.command == "demo":
         runs = [await demo(args)]
     else:
         semaphore = asyncio.Semaphore(4)
         roots = args.source or Path("fixtures/dev-00")
+        if not args.case:
+            raise ValueError("--case or --resume is required")
         snapshots = [load_snapshot(case, roots) for case in args.case]
         runs = await asyncio.gather(
             *[
@@ -134,7 +140,12 @@ def main() -> None:
         )
         command.add_argument("--out", type=Path, default=Path("runs"))
         if name == "investigate":
-            command.add_argument("--case", action="append", required=True)
+            command.add_argument("--case", action="append")
+            command.add_argument(
+                "--resume",
+                type=Path,
+                help="continue a saved run with its original source and limits",
+            )
             command.add_argument(
                 "--source", type=Path, help="manifest root (default fixtures/dev-00)"
             )

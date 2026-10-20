@@ -90,16 +90,41 @@ controller graph is available only with `--graph hub`: deprecated; removed if fi
 evaluation shows no difference. Results, traces, batch metadata and leaderboard rows
 record the selected graph. See [graph variants and compiled diagrams](graph.md).
 
-Each fresh UUID directory contains `report.md`, `result.json`, `trace.jsonl`, and
-`state.sqlite`. Reports preserve ranked support/contradictions, facts/assumptions,
+Each fresh UUID directory contains `report.md`, `result.json`, `trace.jsonl`,
+`state.sqlite`, immutable `run.json` configuration/version metadata, and a frozen
+`source/` snapshot. Reports preserve ranked support/contradictions, facts/assumptions,
 verification recommendations, unresolved objections, gaps, and all six roles'
 usage. Failed or resource-exhausted investigations exit nonzero after writing artifacts.
 Input errors print a concise message and create no run. Unknown token counts remain `unknown`; known subtotals remain available in
 JSON. Recommendations never mean a fix was applied. Control-step failures and repaired decisions produce partial reports through
 Reporting when capacity permits. Hard execution limits retain a partial summary; inconclusive is a valid diagnosis. `inspect` only reads local exports.
-SQLite checkpoints retain admission/receipts/acceptance, but public resume and
-crash/replay hardening are deferred to M4. The bounded demo profile and payloads
-are specified in [LLD-03](lld-03-roles.md). This is not a recovery guarantee.
+Resume an interrupted run with the same model configuration:
+
+```sh
+uv run incident-investigator investigate --resume runs/<run-uuid> --model openrouter
+# Scripted recovery supplies the remaining actions explicitly:
+uv run incident-investigator investigate --resume runs/<run-uuid> --model scripted --script remaining-actions.json
+```
+
+Resume restores the saved source, graph, limits, original wall deadline, fault
+counters and consumed call allowances. Omit `--case` and `--source`. Dataset,
+prompt, tool-contract, runtime, dependency and checkpoint-schema incompatibilities
+are refused before checkpoint setup or adapter calls; saved progress remains intact.
+Runs created before versioned metadata was introduced cannot use this resume path.
+Saved sibling responses and accepted evidence/results are reused. Unknown prior
+calls retain their charge and may retry with fresh call/attempt/invocation IDs
+within the original limits. Exactly-once provider execution is not guaranteed.
+A kernel lock rejects another modifying invocation of the same run and releases
+automatically after process death. Parallel branches remain enabled. The local
+async runner shares four active-call permits across all investigations; caller
+semaphores can further restrict capacity. Separate CLI processes are separate runners.
+Transient tool failures retry within the call allowance; exhausted or partial
+sources remain explicit gaps while independent work survives.
+`stop_category` distinguishes `completed`, `inconclusive`, `interrupted`,
+`resource_exhausted`, and `failed`; `stop_reason` retains additional detail.
+Graceful interruption exports saved partial progress. After an unclean process
+kill, resume regenerates exports from SQLite; an existing export may be stale.
+The bounded demo profile and payloads are specified in [LLD-03](lld-03-roles.md).
 LangSmith tracing is explicitly disabled; traces and artifacts remain local.
 
 ## OpenRouter models

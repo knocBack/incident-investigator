@@ -74,7 +74,7 @@ class OpenRouterModel:
         try:
             body = response.json()
         except ValueError:
-            body = {}
+            body = None
         error = body.get("error") if isinstance(body, dict) else None
         if response.is_error or error:
             code = error.get("code") if isinstance(error, dict) else None
@@ -236,8 +236,8 @@ class OpenRouterModel:
                         raise
                     # Providers may reject a large strict schema (complexity limits). JSON mode
                     # keeps the same runtime validation; remember it for this model and run.
-                    self._schema_rejected.add(model)
                     body = await post(False)
+                    self._schema_rejected.add(model)
         except (TimeoutError, httpx.TimeoutException):
             raise ModelCallError(
                 "OpenRouter request timed out",
@@ -266,8 +266,15 @@ class OpenRouterModel:
                 return None
             return value
 
-        choices = body.get("choices") or []
-        message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
+        choices = body.get("choices")
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], dict)
+            or not isinstance(choices[0].get("message"), dict)
+        ):
+            raise ModelCallError("OpenRouter returned an invalid response message", retryable=True)
+        message = choices[0]["message"]
         content = self._redact(str(message.get("content") or ""))
         try:
             action = json.loads(content)

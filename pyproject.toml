@@ -45,3 +45,6 @@ ignore = ["E501"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/incident_investigator"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"evals/expected" = "incident_investigator/grading/expected"
