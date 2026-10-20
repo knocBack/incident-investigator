@@ -181,7 +181,7 @@ def test_all_skipped_job_explains_the_stop_and_links_to_comparison(repo, tmp_pat
     assert skip["reason"] in result["output"]
     with TestClient(create_console(repo, jobs=jobs)) as client:
         page = client.get("/jobs/blocked").text
-        assert 'id="job-outcome"' in page and "Open comparison" in page
+        assert 'id="job-outcome"' in page and "Open results" in page
         assert f"/suites/{result['suites'][0]['id']}" in page
 
 
@@ -955,3 +955,134 @@ async def test_model_error_counts_use_receipts_when_older_trace_is_absent(repo):
     )
     row = present_run({"prefix": "runs/r", "status": "failed"}, repo.artifacts)
     assert row["model_call_errors"] == 1 and row["provider_issue"] == "request timed out"
+
+
+def test_first_click_launch_waits_for_current_preview_in_shipped_javascript():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required for the browser-script interaction regression")
+    tests = Path(__file__).parent
+    completed = subprocess.run(
+        [
+            node,
+            str(tests / "console_launch_test.cjs"),
+            str(tests.parent / "src/incident_investigator/web/console.js"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert (
+        "first-click launch, latest-settings check, authorization and retry passed"
+        in completed.stdout
+    )
+
+
+@pytest.mark.parametrize("graph,system", [(None, "multi"), ("single", "single")])
+def test_legacy_suite_infers_its_single_system_and_results_link(repo, tmp_path, graph, system):
+    store = repo.artifacts
+    store.save_json("jobs/old/job.json", {"id": "old", "status": "completed"})
+    store.save_json("suites/old/batch.json", {"launch_id": "old"})
+    store.save_json("suites/old/leaderboard.json", {"models": []})
+    store.save_json(
+        "suites/old/r/result.json",
+        {"run_id": "r", "launch_id": "old", "graph": graph, "status": "completed"},
+    )
+    store.save_json(
+        "suites/old/r/grade.json", {"run_id": "r", "family": "case-02", "verdict": "inconclusive"}
+    )
+    repo.runs.refresh()
+    suite = repo.runs.suites()[0]
+    jobs = Jobs(repo, tmp_path)
+    with TestClient(create_console(repo, jobs=jobs)) as client:
+        page = client.get(f"/suites/{suite['id']}").text
+        assert "Single-system run: no comparison." in page
+        assert "no skip reason was recorded" not in page
+        assert f"Systems {system}" in page
+        assert "Open results" in client.get("/jobs/old").text
+    assert jobs.get("old")["suites"][0]["results_label"] == "Open results"
+
+
+def test_empty_hypothesis_summary_does_not_invent_a_retained_hypothesis():
+    from incident_investigator.console_views import grade_summary
+
+    for verdict in ("inconclusive", "no_report"):
+        text = grade_summary(
+            {"diagnosis": "inconclusive", "hypotheses": []},
+            {
+                "verdict": verdict,
+                "diagnosis_checks": {"culprit_service": False, "mechanism": False},
+            },
+        )
+        assert "No ranked hypothesis was returned" in text
+        assert "retained hypothesis" not in text
+        assert ("No final report was completed" in text) == (verdict == "no_report")
+
+
+def test_tied_verdict_summary_compares_measured_per_attempt_resources_only():
+    from incident_investigator.console_views import comparison_outcome
+
+    multi = {
+        "provisional": False,
+        "pass1": 1,
+        "correct": 2,
+        "n": 2,
+        "runs": [],
+        "grounding": 0.4,
+        "resources": {
+            "wall_seconds": 307.04,
+            "input_tokens": 295820,
+            "model_calls": 22,
+            "tool_calls": 20,
+        },
+    }
+    single = {
+        "provisional": False,
+        "pass1": 1,
+        "correct": 1,
+        "n": 1,
+        "runs": [],
+        "grounding": 1,
+        "resources": {
+            "wall_seconds": 60.41,
+            "input_tokens": 60734,
+            "model_calls": 5,
+            "tool_calls": 4,
+        },
+    }
+    text = comparison_outcome({"multi": multi, "single": single})
+    assert "same correct-verdict rate" in text and "Per retained attempt" in text
+    assert "Single used 61% less wall time" in text
+    assert "Single used 59% fewer input tokens" in text
+    assert (
+        "Single used 55% fewer model calls" in text and "Single used 60% fewer tool calls" in text
+    )
+    assert "Single had higher measured grounding (1.00 vs 0.40)" in text
+    assert "higher correct-verdict rate" not in text
+    single["resources"].update(wall_seconds=None, input_tokens=None, known_input_tokens=60734)
+    text = comparison_outcome({"multi": multi, "single": single})
+    assert "less wall time" not in text and "fewer input tokens" not in text
+    multi["grounding"] = None
+    assert "higher measured grounding" not in comparison_outcome({"multi": multi, "single": single})
+
+
+def test_grounding_hint_and_launch_button_status_are_visible(repo, tmp_path):
+    store = repo.artifacts
+    store.save_json("suites/hint/batch.json", {"systems": ["multi"]})
+    store.save_json("suites/hint/leaderboard.json", {"models": []})
+    repo.runs.refresh()
+    with TestClient(create_console(repo, jobs=Jobs(repo, tmp_path))) as client:
+        page = client.get(f"/suites/{repo.runs.suites()[0]['id']}").text
+        assert (
+            "fraction of ranked hypotheses" in page and "(measured/total) counts attempts" in page
+        )
+        assert "not proof of semantic support" in page
+        form = client.get("/run").text
+        assert 'id="launch-status" role="status"' in form
+        assert 'aria-describedby="launch-status"' in form

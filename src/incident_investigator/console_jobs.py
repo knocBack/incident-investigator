@@ -284,6 +284,14 @@ class Jobs:
                 for r in metadata["runs"]
             ]
             for suite in metadata["suites"]:
+                systems = (
+                    suite["batch"].get("systems")
+                    or sorted(
+                        {r["system"] for r in metadata["runs"] if r.get("suite") == suite["id"]}
+                    )
+                    or ["multi"]
+                )
+                suite["results_label"] = "Open results" if len(systems) == 1 else "Open comparison"
                 suite["title"] = suite_title(
                     suite, [r for r in metadata["runs"] if r.get("suite") == suite["id"]]
                 )

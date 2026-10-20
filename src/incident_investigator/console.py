@@ -305,11 +305,15 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             row["provisional"] |= provisional
         variants = {f["id"] for f in repo.catalog.faults() if f.get("case_set") == "variants"}
         selected_cases = selected["batch"].get("faults", [r["fault"] for r in metrics])
+        selected_systems = (
+            selected["batch"].get("systems") or sorted({r["system"] for r in rows}) or ["multi"]
+        )
         return render(
             request,
             "suite.html",
             suite=selected,
             suite_title=suite_title(selected, rows),
+            selected_systems=selected_systems,
             runs=rows,
             stats=summary(rows),
             k=k,
@@ -321,7 +325,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
                     {**item, "case_set": "variants" if item.get("fault") in variants else "primary"}
                     for item in board.get("skipped", selected["batch"].get("skipped", []))
                 ],
-                systems=selected["batch"].get("systems", []),
+                systems=selected_systems,
             ),
             systems=system_metrics(board, rows, k),
             provisional=provisional,

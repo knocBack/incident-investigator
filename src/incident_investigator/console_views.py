@@ -79,6 +79,8 @@ def grade_summary(result, grade):
         return "Counted correct: the saved grade passed its required diagnosis and evidence checks."
     checks = grade.get("diagnosis_checks", {})
     prefix = "No final report was completed. " if verdict == "no_report" else ""
+    if not result.get("hypotheses"):
+        return prefix + "No ranked hypothesis was returned; this attempt is not counted correct."
     if checks.get("culprit_service") and checks.get("mechanism"):
         if checks.get("key_evidence_cited") is False:
             return (
@@ -252,6 +254,35 @@ def present_run(run, store, suite_prefix=None):
     }
 
 
+def measured_differences(multi, single):
+    differences = []
+    for field, unit, comparative in (
+        ("wall_seconds", "wall time", "less"),
+        ("input_tokens", "input tokens", "fewer"),
+        ("model_calls", "model calls", "fewer"),
+        ("tool_calls", "tool calls", "fewer"),
+    ):
+        values = []
+        for row in (multi, single):
+            value = row.get("resources", {}).get(field)
+            values.append(
+                value / row["n"] if isinstance(value, int | float) and row.get("n") else None
+            )
+        a, b = values
+        if a is not None and b is not None and a != b and max(a, b) > 0:
+            system = "Multi" if a < b else "Single"
+            differences.append(
+                f"{system} used {(1 - min(a, b) / max(a, b)) * 100:.0f}% {comparative} {unit}"
+            )
+    a, b = multi.get("grounding"), single.get("grounding")
+    if isinstance(a, int | float) and isinstance(b, int | float) and a != b:
+        system = "Multi" if a > b else "Single"
+        differences.append(
+            f"{system} had higher measured grounding ({max(a, b):.2f} vs {min(a, b):.2f})"
+        )
+    return " Per retained attempt: " + "; ".join(differences) + "." if differences else ""
+
+
 def comparison_outcome(metrics):
     multi, single = metrics.get("multi"), metrics.get("single")
     if len(metrics.get("systems", ())) == 1:
@@ -310,7 +341,7 @@ def comparison_outcome(metrics):
         text += f"{'Multi' if mh else 'Single'} retained a hypothesis while the other retained none; this shows diagnostic progress, not a successful investigation."
     else:
         text += "The recorded outcomes below explain progress and failures; no diagnostic winner was established."
-    return text
+    return text + measured_differences(multi, single)
 
 
 def suite_title(suite, runs):

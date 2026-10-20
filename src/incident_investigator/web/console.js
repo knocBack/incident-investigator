@@ -104,38 +104,65 @@ if (form && form.dataset.enabled === "yes") {
       run: data.get("run") || null,
     };
   }
-  let previewVersion = 0;
-  async function update() {
+  let previewVersion = 0, previewKey = "", previewPromise = null;
+  let pending = false, checked = null, launchPhase = "";
+  const launchStatus = document.getElementById("launch-status");
+  function renderLaunch() {
+    launch.disabled = launching || (!pending && (!checked?.launch_allowed || checked.authorization_required));
+    launch.textContent = launching ? launchPhase : pending ? "Launch after check" : "Launch";
+    launchStatus.textContent = launching ? launchPhase : pending
+      ? "Updating command… Launch will wait for the current settings check."
+      : launch.disabled ? error.textContent || "Resolve settings before launching."
+      : "Ready to launch the current settings.";
+  }
+  function update(force = false) {
+    const request = body(), key = JSON.stringify(request);
+    // A blur/change after input must reuse the same check instead of swallowing the click.
+    if (!force && key === previewKey && previewPromise) return previewPromise;
+    previewKey = key;
     const version = ++previewVersion;
-    launch.disabled = true;
+    pending = true;
+    renderLaunch();
     preview.textContent = "Preview out of date; refreshing from current settings...";
     profilePlaceholders();
     document.getElementById("reservation-estimate").textContent = form.elements.provider.value === "openrouter" ? "Checking model prices and initial-call reservation..." : "This replay makes no model calls.";
     document.getElementById("replay-note").hidden = form.elements.provider.value !== "scripted" || form.elements.command.value === "eval";
-    try {
-      const result = await post("/api/preview", body());
-      if (version === previewVersion) {
-        preview.textContent = result.command;
-        document.getElementById("job-limit").textContent =
-          `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
-        document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
-          ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
-          : result.reservation_guide;
-        const authorization = result.authorization_required ? "Tick 'I explicitly authorize OpenRouter calls' in section 02 before launching, including free models." : "";
-        error.textContent = [result.launch_allowed ? "" : result.message, authorization].filter(Boolean).join(" ");
-        blockedFields([...(result.blocked_fields || []), ...(result.authorization_required ? ["confirm_paid"] : [])]);
-        launch.disabled = launching || !result.launch_allowed || result.authorization_required;
+    previewPromise = (async () => {
+      try {
+        const result = await post("/api/preview", request);
+        if (version === previewVersion) {
+          checked = result;
+          pending = false;
+          preview.textContent = result.command;
+          document.getElementById("job-limit").textContent =
+            `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
+          document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
+            ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
+            : result.reservation_guide;
+          const authorization = result.authorization_required
+            ? "Tick 'I explicitly authorize OpenRouter calls' in section 02. Zero-price models can use cap 0 and still require this authorization."
+            : "";
+          error.textContent = [result.launch_allowed ? "" : result.message, authorization].filter(Boolean).join(" ");
+          blockedFields([...(result.blocked_fields || []), ...(result.authorization_required ? ["confirm_paid"] : [])]);
+          renderLaunch();
+        }
+        return result;
+      } catch (e) {
+        if (version === previewVersion) {
+          checked = null;
+          pending = false;
+          preview.textContent = "Resolve settings to preview the command.";
+          document.getElementById("job-limit").textContent = "Job limit unavailable until settings are valid.";
+          error.textContent = e.message;
+          blockedFields([]);
+          renderLaunch();
+        }
+        return null;
       }
-    } catch (e) {
-      if (version === previewVersion) {
-        preview.textContent = "Resolve settings to preview the command.";
-        document.getElementById("job-limit").textContent = "Job limit unavailable until settings are valid.";
-        error.textContent = e.message;
-        blockedFields([]);
-      }
-    }
+    })();
+    return previewPromise;
   }
-  document.getElementById("preview-command").addEventListener("click", update);
+  document.getElementById("preview-command").addEventListener("click", () => update(true));
   function selectSet() {
     for (const input of form.querySelectorAll('input[name="faults"]')) {
       const allowed = form.elements.case_set.value === "all" || input.dataset.set === form.elements.case_set.value;
@@ -145,22 +172,36 @@ if (form && form.dataset.enabled === "yes") {
   }
   form.elements.case_set.addEventListener("change", selectSet);
   selectSet();
-  form.addEventListener("change", update);
-  form.addEventListener("input", update);
+  form.addEventListener("change", () => update());
+  form.addEventListener("input", () => update());
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = event.submitter;
-    if (button.disabled) return;
+    if (launching) return;
     launching = true;
-    button.disabled = true;
+    launchPhase = "Checking settings…";
+    renderLaunch();
     try {
-      const result = await post("/api/jobs", body());
+      let request, validation, checking;
+      do {
+        request = body();
+        checking = update();
+        validation = await checking;
+      } while (checking !== previewPromise || JSON.stringify(request) !== JSON.stringify(body()));
+      if (!validation?.launch_allowed || validation.authorization_required) {
+        launching = false;
+        renderLaunch();
+        return;
+      }
+      launchPhase = "Launching…";
+      renderLaunch();
+      const result = await post("/api/jobs", request);
       location.assign(result.url);
     } catch (e) {
       error.textContent = e.message;
       if (e.message.includes("explicitly authorize OpenRouter")) blockedFields(["confirm_paid"]);
       launching = false;
-      button.disabled = false;
+      checked = null;
+      renderLaunch();
     }
   });
   update();
@@ -193,7 +234,7 @@ if (output) {
     for (const suite of job.suites || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/suites/" + encodeURIComponent(suite.id);
-      a.textContent = "Open comparison · " + (suite.title || suite.name);
+      a.textContent = (suite.results_label || "Open results") + " · " + (suite.title || suite.name);
       a.className = "button primary";
       p.append(a); runs.append(p);
     }
