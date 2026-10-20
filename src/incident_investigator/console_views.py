@@ -29,6 +29,8 @@ def failure_label(reason):
         return f"provider HTTP {match[1]}"
     if "timeout" in reason.lower():
         return "request timed out"
+    if "budget" in reason.lower() and "refus" in reason.lower():
+        return "budget cap refused further calls"
     return reason[:160] or "execution failed"
 
 
@@ -250,6 +252,10 @@ def present_run(run, store, suite_prefix=None):
         if events or "receipts" in result or "calls" in state
         else None,
         "provider_issue": provider_issue,
+        "incomplete_reason": failure_label(reason or provider_issue or run["status"])
+        if run["status"] in {"failed", "resource_exhausted", "interrupted"}
+        or run.get("verdict") == "no_report"
+        else "",
         "progress": f"{stage} · {model_calls} model / {tool_calls} tool calls admitted",
     }
 
@@ -322,6 +328,42 @@ def comparison_outcome(metrics):
         return " ".join(missing)
     if multi["provisional"] or single["provisional"]:
         return "Comparison is provisional while attempts or grades are pending."
+    if any(
+        run.get("incomplete_reason")
+        or run.get("status") in {"failed", "resource_exhausted", "interrupted"}
+        or run.get("verdict") == "no_report"
+        for row in (multi, single)
+        for run in row["runs"]
+    ):
+        outcomes = []
+        for system, row in (("Multi", multi), ("Single", single)):
+            incomplete = [
+                run
+                for run in row["runs"]
+                if run.get("incomplete_reason")
+                or run.get("status") in {"failed", "resource_exhausted", "interrupted"}
+                or run.get("verdict") == "no_report"
+            ]
+            if incomplete:
+                reasons = "; ".join(
+                    dict.fromkeys(
+                        run.get("incomplete_reason") or run.get("status", "no final report")
+                        for run in incomplete
+                    )
+                )
+                outcomes.append(
+                    f"{system} did not finish ({reasons})"
+                    if len(row["runs"]) == 1
+                    else f"{system}: {len(incomplete)} of {len(row['runs'])} attempts did not finish ({reasons})"
+                )
+            else:
+                verdicts = ", ".join(
+                    sorted({run.get("verdict", "ungraded") for run in row["runs"]})
+                )
+                outcomes.append(f"{system}: {verdicts}")
+        return (
+            "; ".join(outcomes) + ". This is not a like-for-like comparison of completed attempts."
+        )
     provider_issues = [
         f"{system}: {run['provider_issue']}"
         for system, row in (("multi", multi), ("single", single))

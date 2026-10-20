@@ -23,7 +23,7 @@ function setup() {
   form.elements = Object.fromEntries(Object.entries({command:"eval-suite",provider:"scripted",model_id:"",case_set:"primary",system:"multi",limits_profile:"demo",repeats:"1",concurrency:"2",budget_usd:"0",run_budget_usd:"",call_seconds:"",wall_seconds:"",max_input_tokens:"64000",run:"",trace:"",confirm_paid:""}).map(([k,v])=>[k,new Element(v)]));
   form.elements.namedItem = name => form.elements[name];
   form.elements.limits_profile.selectedOptions = [{value:"demo",dataset:{callSeconds:30,wallSeconds:240}}];
-  const nodes = Object.fromEntries(["run-error","command-preview","launch-job","launch-status","run-error-fields","reservation-estimate","replay-note","job-limit","preview-command"].map(k=>[k,new Element()]));
+  const nodes = Object.fromEntries(["suite-budget-warning","run-error","command-preview","launch-job","launch-status","run-error-fields","reservation-estimate","replay-note","job-limit","preview-command"].map(k=>[k,new Element()]));
   nodes["run-form"] = form;
   const document = {
     querySelector: () => ({content:"local-token"}), querySelectorAll: () => [],
@@ -102,5 +102,21 @@ function setup() {
   d.reply(retry[1], {url:"/jobs/after-refusal"}); await second;
   assert.deepEqual(d.destinations, ["/jobs/after-refusal"]);
 
+  // A late cancel acknowledgement cannot overwrite an already-final SSE status.
+  const cancelButton = new Element(), cancelStatus = new Element();
+  cancelButton.dataset.job = "child";
+  let acknowledge;
+  const cancelDocument = {
+    querySelector: () => ({content:"local-token"}), querySelectorAll: () => [],
+    getElementById: name => ({"cancel-job":cancelButton,"cancel-status":cancelStatus})[name] || null,
+  };
+  vm.runInNewContext(script, {document:cancelDocument,window:{confirm:()=>true},fetch:(url, options)=> {
+    assert.equal(url, "/api/jobs/child/cancel"); assert.equal(JSON.parse(options.body).confirm, true);
+    return new Promise(resolve=>acknowledge=resolve);
+  }});
+  const cancellation = cancelButton.emit("click");
+  cancelButton.hidden = true; cancelStatus.textContent = "Cancelled by user; graceful finalization finished.";
+  acknowledge({ok:true,json:async()=>({status:"cancelling"})}); await cancellation;
+  assert.match(cancelStatus.textContent, /finalization finished/);
   process.stdout.write("first-click launch, latest-settings check, authorization and retry passed\n");
 })().catch(error => { process.stderr.write(error.stack + "\n"); process.exitCode = 1; }).finally(() => clearTimeout(watchdog));

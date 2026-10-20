@@ -178,6 +178,7 @@ def test_all_skipped_job_explains_the_stop_and_links_to_comparison(repo, tmp_pat
     )
     assert ("USD 0 spent" in result["outcome"]) == reconciled
     assert "Raise Suite cap USD" in result["outcome"]
+    assert result["heading"] == "stopped by budget cap"
     assert skip["reason"] in result["output"]
     with TestClient(create_console(repo, jobs=jobs)) as client:
         page = client.get("/jobs/blocked").text
@@ -455,8 +456,8 @@ def test_paired_suite_explains_progress_timeout_cost_and_grade_conflicts(repo, t
     with TestClient(create_console(repo, jobs=jobs)) as client:
         suite = repo.runs.suites()[0]
         page = client.get(f"/suites/{suite['id']}").text
-        assert "Provider errors affected these attempts" in page
-        assert "not a fair comparison of diagnosis quality" in page
+        assert "did not finish" in page
+        assert "not a like-for-like comparison of completed attempts" in page
         assert (
             "stopped during reporting; provider HTTP 502; retained a high-confidence hypothesis"
             in page
@@ -524,7 +525,9 @@ def test_live_job_refreshes_stage_and_admitted_call_counts(repo, tmp_path):
     )
     store.save_json("runs/live/phoenix.json", {"url": "http://127.0.0.1:6006/projects/p/traces/t"})
     jobs = Jobs(repo, tmp_path)
-    jobs.tasks["live"] = object()  # get() only checks membership, no child process is launched.
+    jobs.tasks["live"] = type(
+        "Active", (), {"done": lambda self: False}
+    )()  # get() only checks membership, no child process is launched.
     store.write(
         "runs/live/trace.jsonl",
         b'{"event":"state_transition","stage":"gathering","model_calls":3,"tool_calls":2}\n',

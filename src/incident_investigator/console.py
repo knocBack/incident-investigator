@@ -10,6 +10,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from incident_investigator.console_jobs import (
     display_command,
     graph_variants,
     job_plan,
+    suite_budget_warning,
 )
 from incident_investigator.console_views import (
     check_reasons,
@@ -70,6 +72,11 @@ class RubricEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     score: str = Field(pattern=r"^(pass|partial|fail|unreviewed)$")
     reason: str = Field(default="", max_length=10000)
+
+
+class CancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal[True]
 
 
 class Rubric(BaseModel):
@@ -422,6 +429,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         return {
             "command": display_command(argv),
             "plan": job_plan(body, repo),
+            "budget_warning": suite_budget_warning(body, job_plan(body, repo)),
             "authorization_required": body.provider == "openrouter"
             and body.command != "eval"
             and not body.confirm_paid,
@@ -451,6 +459,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             raise HTTPException(404, "Unknown job")
         return render(request, "job.html", job=jobs.get(ident))
 
+    @app.post("/api/jobs/{ident}/cancel")
+    async def cancel_job(ident: str, body: CancelRequest):
+        if not jobs:
+            raise HTTPException(409, "Local process launcher unavailable for this storage backend")
+        try:
+            return jobs.cancel(ident)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown job") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.get("/api/jobs/{ident}/events")
     async def job_events(ident: str):
         if not jobs or not jobs.get(ident):
@@ -460,7 +479,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             while True:
                 record = jobs.get(ident)
                 yield "data: " + json.dumps(record) + "\n\n"
-                if record["status"] != "running":
+                if record["status"] not in {"running", "cancelling"}:
                     break
                 await asyncio.sleep(0.5)
 

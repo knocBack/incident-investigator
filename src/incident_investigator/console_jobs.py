@@ -219,12 +219,28 @@ def job_plan(request: RunRequest, repo: Repositories) -> dict:
     }
 
 
+def suite_budget_warning(request: RunRequest, plan: dict) -> str:
+    from incident_investigator.grading.budget import amount
+
+    if request.provider != "openrouter" or request.command != "eval-suite":
+        return ""
+    per_run = amount(
+        request.run_budget_usd if request.run_budget_usd is not None else request.budget_usd
+    )
+    suite = amount(request.budget_usd)
+    planned = plan["attempts"] * per_run
+    if planned <= suite:
+        return ""
+    return f"{plan['attempts']} attempts × per-run cap USD {per_run:f} = USD {planned:f} vs suite cap USD {suite:f}; later attempts may be refused when reservations no longer fit. These are allowances, not expected spend."
+
+
 class Jobs:
     """Local process adapter. UI only sees persisted job records and artifact keys."""
 
     def __init__(self, repo: Repositories, root: Path | None = None):
         self.repo, self.root = repo, root or home()
         self.tasks: dict[str, asyncio.Task] = {}
+        self.cancel_events: dict[str, asyncio.Event] = {}
         self._refreshed = float("-inf")
         self.preflight = LaunchPreflight()
 
@@ -250,6 +266,18 @@ class Jobs:
             },
         )
         self.tasks[ident] = asyncio.create_task(self.execute(ident, argv, output))
+
+    def cancel(self, ident: str):
+        record = self.get(ident)
+        if not record:
+            raise KeyError(ident)
+        if not record["can_cancel"]:
+            raise ValueError("Only a running job owned by this console can be cancelled.")
+        metadata = self.repo.artifacts.json(f"jobs/{ident}/job.json")
+        metadata.update(status="cancelling", stop_reason="cancelled by user")
+        self.repo.artifacts.save_json(f"jobs/{ident}/job.json", metadata)
+        self.cancel_events.setdefault(ident, asyncio.Event()).set()
+        return self.get(ident)
 
     def get(self, ident):
         metadata = self.repo.artifacts.json(f"jobs/{ident}/job.json")
@@ -298,8 +326,12 @@ class Jobs:
             metadata["replay"] = metadata.get("provider") == "scripted" or (
                 bool(metadata["runs"]) and all(r["model"] == "scripted" for r in metadata["runs"])
             )
-            if metadata["status"] == "running" and ident not in self.tasks:
+            if metadata["status"] in {"running", "cancelling"} and ident not in self.tasks:
                 metadata["status"] = "interrupted"
+            task = self.tasks.get(ident)
+            metadata["can_cancel"] = (
+                metadata["status"] == "running" and task is not None and not task.done()
+            )
             self.outcome(metadata)
         return metadata
 
@@ -347,17 +379,29 @@ class Jobs:
                 f"Skipped {s.get('fault', 'attempt')} | {s.get('system', 'unknown')}: {s['reason']}"
                 for s in skipped
             )
-        if finished and ((skipped and not metadata["runs"]) or budget_stops):
+        if metadata["status"] == "cancelling":
+            metadata["outcome"] = (
+                "Cancellation requested by user; waiting for graceful shutdown and artifact finalization."
+            )
+        elif metadata["status"] == "cancelled":
+            metadata["outcome"] = (
+                f"Cancelled by user; {len(metadata['runs'])} run reports retained. Open the {target} and job log for retained results and spend reconciliation."
+            )
+            if metadata.get("termination") == "SIGKILL":
+                metadata["outcome"] += (
+                    " Graceful shutdown timed out; a forced stop was required and final exports may be incomplete."
+                )
+        elif finished and ((skipped and not metadata["runs"]) or budget_stops):
             metadata["status"] = "stopped"
             if skipped and not metadata["runs"] and budget_stops:
                 cost = "USD 0 spent" if zero_spend else "spend reconciliation unavailable"
                 metadata["outcome"] = (
-                    f"Stopped: budget caps refused all {len(skipped)} attempts before sending; {cost}. Raise Suite cap USD or Per-run cap USD and launch again."
+                    f"Stopped by budget cap: budget caps refused all {len(skipped)} attempts before sending; {cost}. Raise Suite cap USD or Per-run cap USD and launch again."
                 )
             else:
-                reason = "Budget cap prevented further calls. " if budget_stops else ""
+                reason = "Stopped by budget cap: " if budget_stops else "Stopped: "
                 metadata["outcome"] = (
-                    f"Stopped: {reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the {target} for reasons and recorded usage."
+                    f"{reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the {target} for reasons and recorded usage."
                 )
         elif metadata["status"] == "running":
             metadata["outcome"] = (
@@ -384,11 +428,18 @@ class Jobs:
             )
         metadata["outcome_tone"] = (
             "warning"
-            if failed or metadata["status"] in {"stopped", "failed", "interrupted"}
+            if failed
+            or metadata["status"] in {"stopped", "failed", "interrupted", "cancelling", "cancelled"}
             else "info"
         )
         metadata["heading"] = (
-            f"finished, {len(failed)} of {len(metadata['runs'])} runs failed"
+            "cancelled by user"
+            if metadata["status"] == "cancelled"
+            else "stopped by budget cap"
+            if metadata["status"] == "stopped" and budget_stops
+            else "timed out"
+            if metadata.get("stop_reason") == "job timeout"
+            else f"finished, {len(failed)} of {len(metadata['runs'])} runs failed"
             if metadata["status"] == "completed" and failed
             else metadata["status"]
         )
@@ -398,6 +449,9 @@ class Jobs:
         metadata = store.json(f"jobs/{ident}/job.json")
         process = None
         reader = None
+        cancel_waiter = None
+        completion = None
+        cancel_event = self.cancel_events.setdefault(ident, asyncio.Event())
         captured = bytearray()
 
         async def capture():
@@ -406,7 +460,14 @@ class Jobs:
                     captured.extend(chunk[: 2_000_000 - len(captured)])
                     store.write(f"jobs/{ident}/output.log", captured)
 
+        async def finish():
+            await asyncio.shield(reader)
+            return await process.wait()
+
         try:
+            if cancel_event.is_set():
+                metadata.update(status="cancelled", stop_reason="cancelled by user")
+                return
             env = {
                 **os.environ,
                 "II_HOME": str(self.root),
@@ -420,13 +481,22 @@ class Jobs:
                 env=env,
             )
             reader = asyncio.create_task(capture())
+            completion = asyncio.create_task(finish())
+            cancel_waiter = asyncio.create_task(cancel_event.wait())
             async with asyncio.timeout(metadata["plan"]["timeout_seconds"]):
-                await asyncio.shield(reader)
-                metadata["exit_code"] = await process.wait()
-            metadata["status"] = "completed" if metadata["exit_code"] == 0 else "failed"
+                await asyncio.wait((completion, cancel_waiter), return_when=asyncio.FIRST_COMPLETED)
+                if cancel_event.is_set():
+                    metadata.update(status="cancelled", stop_reason="cancelled by user")
+                else:
+                    metadata["exit_code"] = await completion
+                    metadata["status"] = "completed" if metadata["exit_code"] == 0 else "failed"
         except asyncio.CancelledError:
-            metadata["status"] = "interrupted"
+            metadata["status"] = "cancelled" if cancel_event.is_set() else "interrupted"
+            if cancel_event.is_set():
+                metadata["stop_reason"] = "cancelled by user"
             raise
+        except TimeoutError:
+            metadata.update(status="failed", error="TimeoutError", stop_reason="job timeout")
         except Exception as exc:
             metadata["status"] = "failed"
             metadata["error"] = type(exc).__name__
@@ -449,6 +519,14 @@ class Jobs:
                 if not reader.done():
                     reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
+            if cancel_waiter:
+                cancel_waiter.cancel()
+                await asyncio.gather(cancel_waiter, return_exceptions=True)
+            if completion:
+                if not completion.done():
+                    completion.cancel()
+                await asyncio.gather(completion, return_exceptions=True)
+            self.cancel_events.pop(ident, None)
             if process:
                 metadata["exit_code"] = process.returncode
             store.save_json(f"jobs/{ident}/job.json", metadata)

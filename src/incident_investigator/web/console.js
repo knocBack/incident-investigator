@@ -125,6 +125,9 @@ if (form && form.dataset.enabled === "yes") {
     pending = true;
     renderLaunch();
     preview.textContent = "Preview out of date; refreshing from current settings...";
+    const priorBudgetWarning = document.getElementById("suite-budget-warning");
+    priorBudgetWarning.textContent = "";
+    priorBudgetWarning.hidden = true;
     profilePlaceholders();
     document.getElementById("reservation-estimate").textContent = form.elements.provider.value === "openrouter" ? "Checking model prices and initial-call reservation..." : "This replay makes no model calls.";
     document.getElementById("replay-note").hidden = form.elements.provider.value !== "scripted" || form.elements.command.value === "eval";
@@ -140,6 +143,9 @@ if (form && form.dataset.enabled === "yes") {
           document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
             ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
             : result.reservation_guide;
+          const budgetWarning = document.getElementById("suite-budget-warning");
+          budgetWarning.textContent = result.budget_warning || "";
+          budgetWarning.hidden = !result.budget_warning;
           const authorization = result.authorization_required
             ? "Tick 'I explicitly authorize OpenRouter calls' in section 02. Zero-price models can use cap 0 and still require this authorization."
             : "";
@@ -207,6 +213,19 @@ if (form && form.dataset.enabled === "yes") {
   });
   update();
 }
+const cancel = document.getElementById("cancel-job");
+if (cancel) cancel.addEventListener("click", async () => {
+  if (!window.confirm("Cancel this job? The running attempt will stop; graceful shutdown will retain results and reconcile spend where available.")) return;
+  cancel.disabled = true;
+  const status = document.getElementById("cancel-status");
+  status.textContent = "Requesting cancellation…";
+  try {
+    await post("/api/jobs/" + encodeURIComponent(cancel.dataset.job) + "/cancel", {confirm: true});
+    if (!cancel.hidden) status.textContent = "Cancellation requested; waiting for graceful finalization.";
+  } catch (error) {
+    status.textContent = error.message;
+  }
+});
 const output = document.getElementById("job-output");
 if (output) {
   const stream = new EventSource("/api/jobs/" + output.dataset.job + "/events");
@@ -229,7 +248,13 @@ if (output) {
       job.exit_code === undefined
         ? job.error || ""
         : "Exit code: " + job.exit_code;
-    if (job.status !== "running") stream.close();
+    if (cancel) {
+      cancel.hidden = !job.can_cancel && job.status !== "cancelling";
+      cancel.disabled = !job.can_cancel;
+      cancel.textContent = job.status === "cancelling" ? "Cancelling…" : "Cancel job";
+      if (job.status === "cancelled") document.getElementById("cancel-status").textContent = job.termination === "SIGKILL" ? "Cancelled by user; forced stop required." : "Cancelled by user; graceful finalization finished.";
+    }
+    if (!["running", "cancelling"].includes(job.status)) stream.close();
     const runs = document.getElementById("job-runs");
     runs.replaceChildren();
     for (const suite of job.suites || []) {

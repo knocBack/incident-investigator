@@ -442,7 +442,9 @@ def test_live_job_discovers_runs_and_trace_links_before_reports(tmp_path, monkey
         refresh()
 
     monkeypatch.setattr(repo.runs, "refresh", counted_refresh)
-    jobs.tasks["live"] = None  # Presence represents the independently running child.
+    jobs.tasks["live"] = type(
+        "Active", (), {"done": lambda self: False}
+    )()  # Presence represents the independently running child.
     record = jobs.get("live")
     assert record["status"] == "running" and len(record["suites"]) == 1
     run = record["runs"][0]
