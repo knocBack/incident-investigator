@@ -1,16 +1,25 @@
-# Incident Investigator
+<div align="center">
 
-A local, evidence-based incident investigator. Six agent roles inspect a frozen copy of logs, metrics, changes, dependencies and incident history, then produce a report with ranked causes, citations, uncertainty and recommended checks.
+# 🔎 Incident Investigator
 
-The built-in fault lab simulates a checkout service calling inventory and a database. It provides five controllable failures. Investigators read saved evidence through typed tools; they do not operate the live application.
+**AI agents that find out why production broke and show you the proof.**
 
-## Why multiple agents?
+[![CI](https://github.com/knocBack/incident-investigator/actions/workflows/ci.yml/badge.svg)](https://github.com/knocBack/incident-investigator/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.13-blue)
+![LangGraph](https://img.shields.io/badge/built%20with-LangGraph-1c3c3c)
+![Status](https://img.shields.io/badge/status-MVP-yellow)
 
-Two specialists investigate different parts of the incident in parallel. A reasoning role compares their findings, and a critic challenges the explanation before reporting. This separates evidence collection from interpretation and makes disagreements visible. It also adds model calls, coordination and latency. Whether that cost improves diagnosis over one agent remains an evaluation question.
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Console](#console) · [Status](#status-and-results) · [What's next](#whats-next) · [Docs](#documentation)
+
+</div>
+
+---
+
+Six AI agents investigate a service incident the way an on-call engineer would. They read a frozen copy of logs, metrics, changes, dependencies and incident history. They rank likely causes, let a critic challenge them, and write a report that cites its evidence. A built-in fault lab creates the incidents, so everything runs locally.
 
 ## Quick start
 
-From the repository root, with `uv` and Python 3.13 installed:
+Needs `uv` and Python 3.13.
 
 ```sh
 uv sync --locked
@@ -18,16 +27,21 @@ uv run incident-investigator demo --model scripted --script tests/scripted-demo.
 uv run incident-investigator console
 ```
 
-Open **http://127.0.0.1:8765**. The demo prints the report path under `var/runs/`; the console discovers it automatically. This sequence was verified on the current implementation. The scripted replay makes no model calls and intentionally reports **inconclusive**. It demonstrates coordination and retained artifacts, rather than model accuracy.
+Open http://127.0.0.1:8765 to browse the run.
 
-For a model-backed investigation, set a key in the shell that launches the command:
+💰 No API key, no cost · 📄 report saved to `var/runs/<run-id>/report.md`
+
+- The scripted demo replays canned agent actions. It checks the workflow, not diagnosis quality, so its report is inconclusive by design.
+- Each run also saves `result.json`, `trace.jsonl` and a `state.sqlite` checkpoint.
+
+With a real model (paid, not run for this README):
 
 ```sh
 export OPENROUTER_API_KEY='replace-with-your-key'
 uv run incident-investigator demo --model openrouter --fault deployment_regression
 ```
 
-This uses the adapter's default model. Set `II_OPENROUTER_MODEL` to a complete provider/model ID to choose another, or use `--model-id`. Provider access, prices and availability vary. The command above can incur charges and was **not executed** during this documentation change. Use `eval-suite` for a shared monetary budget guard; see [quick start](docs/quick-start.md) and [usage](docs/usage.md).
+See [quick start](docs/quick-start.md) for grading, suites and the budget guard.
 
 ## How it works
 
@@ -47,46 +61,92 @@ flowchart LR
     C -->|no objections| W
 ```
 
-The staged LangGraph workflow checkpoints model and tool calls in SQLite. Runtime code owns IDs, validation, call limits, retries and evidence provenance. Interrupted runs can resume under their original deadline and limits. A missing response remains an unknown charged attempt; recovery does not promise exactly-once provider execution.
-
-Every run retains `report.md`, `result.json`, `trace.jsonl`, `state.sqlite`, immutable configuration and frozen source data. The [console guide](docs/ui.md) explains reports, evidence, grading, comparisons and optional Phoenix traces.
-
-![Scripted evaluation runs in the local console](docs/assets/ui-runs.png)
-
-## Evaluation status
-
-The repository includes a deterministic grader, five lab fault families, scripted regression tests and a [historical exploratory re-grade](evals/results/exploratory-2026-10-19/README.md). That re-grade records **1 correct, 4 inconclusive and 5 missing reports** across ten early runs with changing configurations. It is not a controlled comparison or a current accuracy estimate.
-
-### Upcoming multi-agent versus single-agent comparison
-
-**Results pending.** The single-agent baseline, paired incidents and reliability variants are a separate evaluation change. A later benchmark and comparison report will use matched models, tools, budgets and incidents. No comparative scores are published here. See [evaluation](docs/evaluation.md) for metrics and the [evaluation plan](docs/evaluation-plan.md) for the accepted protocol.
-
-## Repository map
-
-| Path | Purpose |
+| Idea | What it means |
 | --- | --- |
-| `src/incident_investigator/` | CLI, staged runtime, model adapters, storage and console |
-| `src/incident_investigator/lab/` | Fault lab, load client and snapshot export |
-| `src/incident_investigator/tools/` | Typed frozen-evidence retrieval and controlled failures |
-| `fixtures/dev-00/` | Agent-visible development snapshot |
-| `evals/expected/` | Evaluator-only expectations; never investigator inputs |
-| `evals/results/` | Retained public evaluation summaries |
-| `tests/` | Scripted and mocked checks; live provider tests are opt-in |
-| `docs/` | User guides, design contracts and evaluation protocol |
-| `var/` | Default local artifacts; gitignored |
+| Six roles | Two specialists gather evidence in parallel; reasoning, critic and reporting follow |
+| Frozen evidence | Agents query a fixed snapshot through typed tools, never the live service |
+| Code owns state | Models propose actions; the runtime validates them and enforces limits |
+| Finite and resumable | Every run has call, time and review limits, and can resume from its SQLite checkpoint |
+
+Evidence comes from the fault lab today. Sources sit behind a typed registry, so real monitoring such as Prometheus or OpenTelemetry can be plugged in later. No such integration ships yet.
+
+## Console
+
+Browse runs, read reports and check each citation against the frozen evidence. See the [console guide](docs/ui.md).
+
+<p align="center">
+  <img src="docs/assets/ui-runs.png" width="49%" alt="Runs and suites list">
+  <img src="docs/assets/ui-evidence.png" width="49%" alt="Frozen evidence with clickable IDs">
+</p>
+<p align="center"><em>Left: all runs and suites. Right: a run's frozen evidence, with clickable IDs.</em></p>
+
+<p align="center">
+  <img src="docs/assets/ui-grade.png" width="70%" alt="Automatic grade beside the expected answer">
+</p>
+<p align="center"><em>Automatic grade checks beside the expected answer.</em></p>
+
+## Status and results
+
+| Area | Status |
+| --- | --- |
+| Fault lab with five fault types | ✅ Done |
+| Six-role staged investigation | ✅ Done |
+| Checkpoint resume and tool-failure recovery | ✅ Done |
+| Offline grader and repeated evaluation suites | ✅ Done |
+| Local evaluation console | ✅ Done |
+| Ten paired incidents and single-agent baseline | 🔜 In progress |
+| Multi-agent vs single-agent comparison | 🔜 **Results pending** |
+
+An [early exploratory re-grade](evals/results/exploratory-2026-10-19/README.md) of ten development runs found 1 correct, 4 inconclusive and 5 with no report. Their setups varied, so this is not an accuracy estimate.
+
+**Multi-agent vs single-agent: results pending.** No comparison numbers exist yet. [Evaluation](docs/evaluation.md) describes the method.
+
+## What's next
+
+- [x] **Never lose a run:** resume an investigation after a crash
+- [ ] **One agent vs a team:** a public scoreboard on 10 incidents (in progress)
+- [ ] **Start from a real alert:** an alerting webhook kicks off an investigation automatically
+- [ ] **First real data source:** read live metrics from Prometheus
+- [ ] **Answer in chat:** post a short summary to Slack, with a link to the full report
+- [ ] **Beat the AI:** a random hidden fault, and you race the agents to name the cause
 
 ## Documentation
 
-Start with [quick start](docs/quick-start.md), [console guide](docs/ui.md) or [usage reference](docs/usage.md). Read [architecture](docs/architecture.md), [workflow](docs/graph.md), [decisions](docs/decisions.md) and the [technical note](docs/technical-note.md) for the design. The [glossary](docs/glossary.md) explains recurring terms.
+| Doc | What it covers |
+| --- | --- |
+| [Quick start](docs/quick-start.md) | Free demo, grading, suites and OpenRouter setup |
+| [Console guide](docs/ui.md) | The local console, with screenshots |
+| [Usage reference](docs/usage.md) | All commands and options |
+| [Architecture](docs/architecture.md) | Components, roles, state, checkpoints and repository layout |
+| [Workflow](docs/graph.md) | The staged graph and its routes |
+| [Decisions](docs/decisions.md) | Key design choices and their tradeoffs |
+| [Evaluation](docs/evaluation.md) | Verdicts, metrics, results and the [plan](docs/evaluation-plan.md) |
+| [Technical note](docs/technical-note.md) | Short summary of the approach and its limits |
+| [Glossary](docs/glossary.md) | Terms used across the docs |
+| [Scope](docs/requirements.md) | What the MVP does and does not do |
+| [Runtime](docs/lld.md), [roles](docs/lld-03-roles.md), [tools](docs/tool-contracts.md) | Detailed contracts |
 
-For contributors:
+Contributors: development checks are in [usage](docs/usage.md#development-checks).
 
-```sh
-uv sync --locked
-uv run pre-commit install
-uv run pytest -q -o tmp_path_retention_policy=none
-uv run ruff check .
-uv run ruff format --check .
-```
+## References
 
-Keep runtime sources isolated from evaluator expectations and preserve finite execution limits. See [requirements](docs/requirements.md), [runtime contracts](docs/lld.md), [role contracts](docs/lld-03-roles.md) and [tool contracts](docs/tool-contracts.md).
+Design
+
+- [Anthropic, Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): parallel specialists, the critic loop and the latency and cost tradeoff
+- [Anthropic, How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): lead plus specialists, and the token and waiting costs of multi-agent systems
+- [incident.io, Building Investigations](https://incident.io/blog/building-investigations-what-it-takes-to-build-an-ai-sre): frozen incidents, adversarial review and evidence-linked claims
+- [Google SRE book, Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/): hypothesize and test, and keep negative results
+- [Alistair Cockburn, Hexagonal Architecture](https://alistair.cockburn.us/hexagonal-architecture/): data sources and storage behind ports and adapters
+
+Evaluation
+
+- [Chen et al., 2021, Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374): the pass@k metric and its unbiased estimator
+- [Yao et al., 2024, tau-bench](https://arxiv.org/abs/2406.12045): the pass^k reliability metric and its estimator
+- [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents): pass@k versus pass^k, and grading the output rather than the path
+
+Standards
+
+- [OpenTelemetry logs](https://opentelemetry.io/docs/specs/otel/logs/data-model/) and [metrics](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) data models: the shape of lab evidence records
+- [OpenTelemetry demo feature flags](https://opentelemetry.io/docs/demo/feature-flags/): runtime switches for injecting faults
+
+See [evaluation](docs/evaluation.md#references) and [decisions](docs/decisions.md#references) for the exact claims each one supports.

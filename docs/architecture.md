@@ -1,6 +1,6 @@
 # Architecture
 
-The system turns an alert and a frozen evidence snapshot into a report a human can inspect. A snapshot is a read-only set of records available before a fixed cutoff. A graph is the executable workflow that coordinates the investigation.
+The system turns an alert and a frozen evidence snapshot into a report a human can inspect. The [glossary](glossary.md) defines snapshot, graph and other recurring terms.
 
 ## System boundaries
 
@@ -11,7 +11,7 @@ flowchart LR
     T <--> G[Staged investigation]
     G <--> M[Model adapter]
     G --> A[Local run artifacts]
-    G -. optional traces .-> P[Local Phoenix]
+    G -. trace export .-> P[Phoenix stack, optional]
     A --> C[Evaluation console]
     A --> E[Offline grader]
     K[Evaluator expectations] --> E
@@ -54,9 +54,9 @@ The local event-loop runner shares four active-call permits across investigation
 
 The default workspace is `var/`, overridden by `II_HOME`. Runs retain human and machine reports, traces, checkpoints, configuration/version metadata and the frozen input. Suites add grades, budget accounting and leaderboards. Imported roots are indexed in place and remain read-only; human reviews and new grades stay in the workspace.
 
-The FastAPI console renders HTML with small JavaScript files. It receives storage repositories through dependency injection. `ArtifactStore` manages opaque keys; `RunRepository` indexes runs and suites; `EvalCatalog` supplies evaluator expectations. Filesystem adapters are the default, and memory adapters support isolated viewing/review tests. An object-store adapter and production telemetry integrations remain future work.
+The FastAPI console renders HTML with small JavaScript files. It receives storage repositories through dependency injection. `ArtifactStore` manages opaque keys; `RunRepository` indexes runs and suites; `EvalCatalog` supplies evaluator expectations. Filesystem adapters are the default, and memory adapters support isolated viewing/review tests. This follows the ports-and-adapters pattern ([Cockburn, Hexagonal Architecture](https://alistair.cockburn.us/hexagonal-architecture/)). An object-store adapter and production telemetry integrations remain future work.
 
-Phoenix export is optional and restricted to loopback HTTP. It shows model/tool inputs, outputs, timing and available usage. The console adds the frozen evidence, expected-answer grade and human rubric. Neither source of traces replaces local recovery artifacts. See the [console guide](ui.md).
+Every run writes its local trace to `trace.jsonl`. Export to the Phoenix stack is optional and restricted to loopback HTTP. Phoenix shows model/tool inputs, outputs, timing and available usage. The console adds the frozen evidence, expected-answer grade and human rubric. Neither source of traces replaces local recovery artifacts. See the [console guide](ui.md).
 
 ## Implementation map
 
@@ -67,7 +67,21 @@ Phoenix export is optional and restricted to loopback HTTP. It shows model/tool 
 | `staged.py` | Stage subgraphs and conditional routes |
 | `runtime.py`, `contracts.py`, `repair.py` | Admission, execution, validation and role exchange |
 | `reliability.py`, `reporting.py` | Invocation ownership, compatibility and exports |
-| `models/`, `telemetry/` | Model boundary and optional tracing |
+| `models/`, `telemetry/` | Model boundary and tracing |
 | `grading/` | Offline verdicts, suites and budget guard |
 | `storage.py`, `workspace.py` | Artifact access, indexing and workspace paths |
 | `console.py`, `console_jobs.py`, `console_views.py`, `web/` | Local launch and review interface |
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/incident_investigator/` | CLI, staged runtime, model adapters, storage and console |
+| `src/incident_investigator/lab/` | Fault lab, load client and snapshot export |
+| `src/incident_investigator/tools/` | Typed frozen-evidence retrieval and controlled failures |
+| `fixtures/dev-00/` | Agent-visible development snapshot |
+| `evals/expected/` | Evaluator-only expectations; never investigator inputs |
+| `evals/results/` | Retained public evaluation summaries |
+| `tests/` | Scripted and mocked checks; live provider tests are opt-in |
+| `docs/` | User guides, design contracts and evaluation protocol |
+| `var/` | Default local artifacts; gitignored |

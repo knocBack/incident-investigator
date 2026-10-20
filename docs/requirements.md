@@ -13,7 +13,7 @@ Given an alert and operational evidence, investigate likely causes and recommend
 
 ## Remaining evaluation work
 
-The accepted [evaluation plan](evaluation-plan.md) specifies ten primary incidents, two reliability variants and a matched single-agent comparison. Those fixtures and baseline are a separate change. The later benchmark must publish diagnosis quality, grounding, calls, latency, tokens and cost without assuming multi-agent superiority. The current five-family lab is not the full ten-incident benchmark.
+The ten paired incidents, reliability variants and matched single-agent comparison are still pending. See [evaluation](evaluation.md#upcoming-multi-agent-versus-single-agent-comparison) for their status.
 
 ## Constraints
 
