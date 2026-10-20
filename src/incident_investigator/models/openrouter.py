@@ -294,6 +294,9 @@ class OpenRouterModel:
             latency_ms=(time.perf_counter() - started) * 1000,
             raw_id=self._redact(str(body["id"])) if body.get("id") else None,
             model=model,
+            finish_reason=self._redact(str(choices[0]["finish_reason"]))[:100]
+            if choices[0].get("finish_reason") is not None
+            else None,
         )
 
     async def generation_cost(self, generation_id: str) -> float | None:

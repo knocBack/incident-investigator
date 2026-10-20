@@ -75,6 +75,19 @@ def reliability_metrics(items):
     }
 
 
+def _grounding(items):
+    values = [g["grounding"]["hypothesis_claim_fraction"] for g in items]
+    measured = [value for value in values if value is not None]
+    return (sum(measured) / len(measured) if measured else None), len(measured)
+
+
+def _execution_failures(items):
+    return sum(
+        g["process"]["execution_status"] in {"failed", "resource_exhausted", "interrupted"}
+        for g in items
+    )
+
+
 def _fault_metrics(items, k):
     def fault_of(g):
         # Standalone `eval` grades have a family but no suite job metadata.
@@ -85,18 +98,17 @@ def _fault_metrics(items, k):
         group = [g for g in items if fault_of(g) == fault]
         correct = sum(g["verdict"] == "correct" for g in group)
         n = len(group)
+        grounding, grounding_measured = _grounding(group)
         pass_at_k, pass_to_k = _pass_metrics(n, correct, min(k, n))
         metrics[fault] = {
             "n": n,
             "correct": correct,
             "reliability": reliability_metrics(group),
             "pass_at_1": correct / n,
-            "grounding": (
-                measured_sum(g["grounding"]["hypothesis_claim_fraction"] for g in group) / n
-                if measured_sum(g["grounding"]["hypothesis_claim_fraction"] for g in group)
-                is not None
-                else None
-            ),
+            "grounding": grounding,
+            "grounding_measured": grounding_measured,
+            "grounding_total": n,
+            "execution_failures": _execution_failures(group),
             "verdicts": dict(Counter(g["verdict"] for g in group)),
             "resources": {
                 field: measured_sum(g["resources"]["totals"].get(field) for g in group)
@@ -139,7 +151,7 @@ def leaderboard(grades, out, skipped=(), k=4):
             total = measured_sum(values)
             return total / len(items) if total is not None else None
 
-        ground = [g["grounding"]["hypothesis_claim_fraction"] for g in items]
+        ground, grounding_measured = _grounding(items)
         walls = [g["resources"]["wall_seconds"] for g in items]
         rows.append(
             {
@@ -154,9 +166,9 @@ def leaderboard(grades, out, skipped=(), k=4):
                     v: sum(g["verdict"] == v for g in items)
                     for v in ("correct", "partial", "wrong", "inconclusive", "no_report")
                 },
-                "mean_grounding": measured_sum(ground) / len(items)
-                if measured_sum(ground) is not None
-                else None,
+                "mean_grounding": ground,
+                "grounding_measured": grounding_measured,
+                "grounding_total": len(items),
                 "mean_cost": mean("cost"),
                 "mean_known_cost": mean("known_cost"),
                 "mean_known_input_tokens": mean("known_input_tokens"),
@@ -168,11 +180,7 @@ def leaderboard(grades, out, skipped=(), k=4):
                 "mean_wall_seconds": measured_sum(walls) / len(items)
                 if measured_sum(walls) is not None
                 else None,
-                "execution_failures": sum(
-                    g["process"]["execution_status"]
-                    in {"failed", "resource_exhausted", "interrupted"}
-                    for g in items
-                ),
+                "execution_failures": _execution_failures(items),
                 "faults": _fault_metrics(items, k),
             }
         )
@@ -201,15 +209,15 @@ def leaderboard(grades, out, skipped=(), k=4):
     lines = [
         "# Exploratory evaluation",
         "",
-        "No acceptance threshold. Diagnostic verdicts are separate from demonstrated recovery and justified uncertainty. Missing measurements remain unknown. Grounding measures provenance; semantic review remains required.",
+        "No acceptance threshold. Diagnostic verdicts are separate from demonstrated recovery and justified uncertainty. Missing measurements remain unknown. Grounding averages measured attempts, with measured/total counts; it measures provenance, and semantic review remains required.",
         "",
-        "| System | Graph | Set | Model(s) | Runs | Diagnostic verdict rate | Grounding | Mean model/tool calls | Mean tokens in/out | Mean USD | Mean wall s |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: |",
+        "| System | Graph | Set | Model(s) | Runs | Execution failures | Diagnostic verdict rate | Grounding | Mean model/tool calls | Mean tokens in/out | Mean USD | Mean wall s |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |",
     ]
     for r in rows:
         models = ", ".join(sorted(set(r["models"].values()))) or "unknown"
         lines.append(
-            f"| {r['system']} | {r['graph']} | {r['suite_kind']} | {models} | {r['runs']} | {display(r['accuracy'])} | {display(r['mean_grounding'])} | {display(r['mean_model_calls'])}/{display(r['mean_tool_calls'])} | {usage_display(r['mean_input_tokens'], r['mean_known_input_tokens'])}/{usage_display(r['mean_output_tokens'], r['mean_known_output_tokens'])} | {usage_display(r['mean_cost'], r['mean_known_cost'])} | {display(r['mean_wall_seconds'])} |"
+            f"| {r['system']} | {r['graph']} | {r['suite_kind']} | {models} | {r['runs']} | {r['execution_failures']} | {display(r['accuracy'])} | {display(r['mean_grounding'])} ({r['grounding_measured']}/{r['grounding_total']}) | {display(r['mean_model_calls'])}/{display(r['mean_tool_calls'])} | {usage_display(r['mean_input_tokens'], r['mean_known_input_tokens'])}/{usage_display(r['mean_output_tokens'], r['mean_known_output_tokens'])} | {usage_display(r['mean_cost'], r['mean_known_cost'])} | {display(r['mean_wall_seconds'])} |"
         )
     lines.extend(
         [
@@ -218,8 +226,8 @@ def leaderboard(grades, out, skipped=(), k=4):
             "",
             "Resource columns below are totals over all retained repeats. k is capped by the number of attempts.",
             "",
-            "| Incident | Set | System | Model(s) | n | Verdicts | pass@1 | k | pass@k | pass^k | Grounding | Model/tool calls | Tokens in/out | USD | Wall s |",
-            "| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |",
+            "| Incident | Set | System | Model(s) | n | Execution failures | Verdicts | pass@1 | k | pass@k | pass^k | Grounding | Model/tool calls | Tokens in/out | USD | Wall s |",
+            "| --- | --- | --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |",
         ]
     )
     for r in rows:
@@ -227,7 +235,7 @@ def leaderboard(grades, out, skipped=(), k=4):
         for incident, metric in r["faults"].items():
             resource = metric["resources"]
             lines.append(
-                f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {usage_display(resource['input_tokens'], resource['known_input_tokens'])}/{usage_display(resource['output_tokens'], resource['known_output_tokens'])} | {usage_display(resource['cost'], resource['known_cost'])} | {display(metric['wall_seconds'])} |"
+                f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['execution_failures']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} ({metric['grounding_measured']}/{metric['grounding_total']}) | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {usage_display(resource['input_tokens'], resource['known_input_tokens'])}/{usage_display(resource['output_tokens'], resource['known_output_tokens'])} | {usage_display(resource['cost'], resource['known_cost'])} | {display(metric['wall_seconds'])} |"
             )
     lines.extend(
         [
@@ -247,9 +255,20 @@ def leaderboard(grades, out, skipped=(), k=4):
                 metric["reliability"]["uncertainty"],
             )
             if recovery["runs"] or uncertainty["runs"]:
-                lines.append(
-                    f"| {row['system']} | {incident} | {recovery['fault_exercised']} / {recovery['recovered']} / {recovery['not_exercised']} | {recovery['success']} / {recovery['runs']} | {uncertainty['justified']} / {uncertainty['runs']} |"
+                r1 = (
+                    f"{recovery['fault_exercised']} / {recovery['recovered']} / {recovery['not_exercised']}"
+                    if recovery["runs"]
+                    else "-"
                 )
+                r1_success = (
+                    f"{recovery['success']} / {recovery['runs']}" if recovery["runs"] else "-"
+                )
+                r2 = (
+                    f"{uncertainty['justified']} / {uncertainty['runs']}"
+                    if uncertainty["runs"]
+                    else "-"
+                )
+                lines.append(f"| {row['system']} | {incident} | {r1} | {r1_success} | {r2} |")
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
         lines.extend(

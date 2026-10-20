@@ -106,7 +106,13 @@ def build_staged_graph(runner: Investigation) -> StateGraph:
         if task.status == "succeeded":
             c.status = "completed"
         else:
-            runner.close(c, "failed", f"{task.role}: {task.failure}")
+            runner.close(
+                c,
+                "failed",
+                "output_truncated"
+                if task.failure == "output_truncated"
+                else f"{task.role}: {task.failure}",
+            )
 
     stages = {
         "orchestrator_plan": (("orchestrator",), runner.plan, save_plan),

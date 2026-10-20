@@ -29,6 +29,7 @@ class ModelResult:
     latency_ms: float
     raw_id: str | None
     model: str | None = None
+    finish_reason: str | None = None
 
 
 class ModelCallError(RuntimeError):

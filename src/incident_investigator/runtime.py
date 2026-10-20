@@ -579,6 +579,8 @@ class Investigation:
         task.messages.append({"role": "assistant", "content": json.dumps(action)})
         repairs = Repairs()
         try:
+            if receipt.get("finish_reason") == "length":
+                raise ValueError("output_truncated")
             allowed = ALLOWED_TOOLS.get(task.role, set())
             final_only = call.request.get("remaining_model_calls_after_this", 1) <= 0 or (
                 call.request.get("remaining_tool_calls", 1) <= 0
@@ -671,7 +673,9 @@ class Investigation:
                 task.status, task.phase, task.failure = (
                     "failed",
                     "settled",
-                    f"invalid output: {error}",
+                    "output_truncated"
+                    if receipt.get("finish_reason") == "length"
+                    else f"invalid output: {error}",
                 )
 
     def report(self, c: Control, partial_reason: str | None = None) -> None:
@@ -918,6 +922,7 @@ class Investigation:
                             receipt["payload"] = result.action.get("action", result.action)
                             receipt["raw_id"] = result.raw_id
                             receipt["model"] = result.model
+                            receipt["finish_reason"] = result.finish_reason
                             receipt["provider_latency_ms"] = result.latency_ms
                             if result.usage:
                                 receipt["usage"] = {
@@ -959,6 +964,7 @@ class Investigation:
             tokens=receipt["usage"] or "unknown",
             model=receipt.get("model"),
             generation_id=receipt.get("raw_id"),
+            finish_reason=receipt.get("finish_reason"),
             latency_ms=receipt["latency_ms"],
             outcome=receipt["error"] or "received",
         )

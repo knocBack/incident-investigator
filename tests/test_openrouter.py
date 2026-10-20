@@ -193,6 +193,74 @@ async def test_invalid_output_reaches_runtime_correction_with_usage(configured, 
     assert result.usage.input_tokens == 12
 
 
+@pytest.mark.parametrize("system", ["multi", "single"])
+@pytest.mark.parametrize("content", ['{"action":', '{"kind":"final","result":{}}'])
+async def test_output_cap_truncation_is_recorded_in_runtime_and_grade(
+    configured, tmp_path, system, content
+):
+    from incident_investigator.grading.grader import expectation, grade_run
+
+    # Even parseable content is incomplete when the provider reports its output cap.
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=catalogue())
+        body = response(content)
+        body["choices"][0]["finish_reason"] = "length"
+        body["usage"]["completion_tokens"] = 4096
+        return httpx.Response(200, json=body)
+
+    directory = await investigate(
+        load_snapshot("dev-00"),
+        OpenRouterModel(transport=httpx.MockTransport(handler)),
+        tmp_path,
+        system=system,
+    )
+    result = json.loads((directory / "result.json").read_text())
+    assert result["status"] == "failed"
+    assert result["stop_reason"] == "output_truncated"
+    receipts = list(result["receipts"].values())
+    assert len(receipts) == (4 if system == "multi" else 2)  # One correction per task.
+    assert all(r["finish_reason"] == "length" for r in receipts)
+    assert all(r["usage"]["output_tokens"] == 4096 for r in receipts)
+    graded = grade_run(directory, expectation("bad_configuration"))
+    assert graded["verdict"] == "no_report"
+    assert graded["process"]["stop_reason"] == "output_truncated"
+    assert graded["resources"]["totals"]["output_tokens"] == 4096 * len(receipts)
+    trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    assert all(
+        event["finish_reason"] == "length" for event in trace if event["event"] == "model_call"
+    )
+
+
+async def test_output_truncation_can_recover_with_the_existing_correction_turn(
+    configured, tmp_path
+):
+    script = ScriptedModel(json.loads(Path("tests/scripted-demo.json").read_text()))
+    posts = 0
+
+    async def handler(request):
+        nonlocal posts
+        if request.method == "GET":
+            return httpx.Response(200, json=catalogue())
+        posts += 1
+        if posts == 1:
+            body = response('{"action":')
+            body["choices"][0]["finish_reason"] = "length"
+        else:
+            scripted = await script.complete(json.loads(request.content)["messages"], {})
+            body = response(json.dumps(scripted.action))
+            body["choices"][0]["finish_reason"] = "stop"
+        return httpx.Response(200, json=body)
+
+    directory = await investigate(
+        load_snapshot("dev-00"), OpenRouterModel(transport=httpx.MockTransport(handler)), tmp_path
+    )
+    result = json.loads((directory / "result.json").read_text())
+    assert result["status"] == "completed" and result["stop_reason"] is None
+    assert sum(r.get("finish_reason") == "length" for r in result["receipts"].values()) == 1
+    assert posts == 9
+
+
 def test_default_and_role_override_selection(configured, monkeypatch):
     monkeypatch.delenv("II_OPENROUTER_MODEL")
     monkeypatch.setenv("II_OPENROUTER_MODEL_OBSERVABILITY", "test/json:free")
