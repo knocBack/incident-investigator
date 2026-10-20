@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from langgraph.errors import NodeCancelledError
@@ -18,7 +18,7 @@ from test_m3_agents import Scenario
 from incident_investigator.contracts import Limits
 from incident_investigator.models import ScriptedModel
 from incident_investigator.reliability import invocation_lock
-from incident_investigator.runtime import Investigation, investigate
+from incident_investigator.runtime import Call, Investigation, investigate
 from incident_investigator.sources.loader import load_snapshot
 
 
@@ -106,18 +106,34 @@ async def test_version_mismatch_is_read_only_and_calls_no_model(tmp_path, change
     assert saved == {path.name: path.read_bytes() for path in directory.iterdir() if path.is_file()}
 
 
-async def test_resume_keeps_original_expired_deadline_and_consumed_allowances(tmp_path):
+async def test_resume_keeps_original_expired_deadline_and_consumed_allowances(
+    tmp_path, monkeypatch
+):
+    from incident_investigator import runtime
+
+    limits = Limits(wall_seconds=60)
     model = Crash()
     with pytest.raises(NodeCancelledError):
-        await investigate(load_snapshot("dev-00"), model, tmp_path, limits=Limits(wall_seconds=0.2))
+        await investigate(load_snapshot("dev-00"), model, tmp_path, limits=limits)
     directory = next(tmp_path.iterdir())
     before = result(directory)
-    await asyncio.sleep(0.21)
+    metadata = (directory / "run.json").read_bytes()
+    deadline = json.loads(metadata)["deadline_at"]
+    # Expire the saved absolute deadline independently of checkpoint/CI speed.
+    monkeypatch.setattr(
+        runtime,
+        "time",
+        SimpleNamespace(
+            time=lambda: deadline + 1,
+            monotonic=runtime.time.monotonic,
+        ),
+    )
     await investigate(None, model, resume=directory)
     after = result(directory)
     assert after["status"] == "resource_exhausted"
     assert before["state"]["calls"].keys() == after["state"]["calls"].keys()
-    assert after["state"]["limits"]["wall_seconds"] == 0.2
+    assert after["state"]["limits"] == limits.model_dump()
+    assert (directory / "run.json").read_bytes() == metadata
 
 
 @pytest.mark.parametrize("outcome", ["timeout", "error", "partial"])
@@ -187,6 +203,71 @@ async def test_default_api_capacity_is_shared_across_investigations(tmp_path):
         ]
     )
     assert peak == 4
+
+
+async def test_local_waiters_leave_shared_capacity_available_to_other_investigations(tmp_path):
+    """A caller's queued branches must not reserve the aggregate runner permits."""
+    queued = asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class LocalCapacity(asyncio.Semaphore):
+        arrivals = 0
+
+        async def acquire(self):
+            self.arrivals += 1
+            if self.arrivals == 4:
+                queued.set()
+            return await super().acquire()
+
+    class BlockedModel(ScriptedModel):
+        calls = 0
+
+        async def complete(self, messages, schema):
+            self.calls += 1
+            entered.set()
+            await release.wait()
+            return await super().complete(messages, schema)
+
+    snapshot = load_snapshot("dev-00")
+    busy_dir, other_dir = tmp_path / "busy", tmp_path / "other"
+    busy_dir.mkdir()
+    other_dir.mkdir()
+    blocked = BlockedModel()
+    busy = Investigation(snapshot, blocked, busy_dir, Limits(), LocalCapacity(1))
+    other = Investigation(
+        snapshot,
+        ScriptedModel([{"kind": "final", "result": {}}]),
+        other_dir,
+        Limits(),
+        asyncio.Semaphore(4),
+    )
+
+    def request(index):
+        return {
+            "call": Call(
+                call_id=str(index),
+                task_id="task",
+                attempt_id="attempt",
+                role="reasoning",
+                kind="model",
+                request={"messages": []},
+            ).model_dump()
+        }
+
+    workers = [asyncio.create_task(busy.execute(request(index))) for index in range(4)]
+    try:
+        async with asyncio.timeout(5):
+            await entered.wait()
+            await queued.wait()
+            # Busy work stays blocked: the other investigation must use a free permit.
+            receipt = await other.execute(request("independent"))
+        assert receipt["inbox"]["independent"]["error"] is None
+        assert blocked.calls == 1
+    finally:
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
 
 @pytest.mark.parametrize("tool", ["history", "log_counts", "metric_stats", "trace_logs"])

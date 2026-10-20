@@ -835,7 +835,7 @@ class Investigation:
         receipt = {"payload": None, "error": None, "usage": None}
         try:
             async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
-                async with runner_capacity(), self.semaphore:
+                async with self.semaphore, runner_capacity():
                     if time.monotonic() >= self.deadline:
                         raise TimeoutError("run deadline expired before dispatch")
                     timeout = min(
