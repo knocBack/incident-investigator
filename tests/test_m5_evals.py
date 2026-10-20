@@ -499,3 +499,34 @@ async def test_cancelled_suite_retains_partial_reports_and_leaderboard(tmp_path)
         # Previously committed paid work survives; unreceived calls stay unknown.
         assert sum(u["known_cost"] for u in result["usage"].values()) >= 0.001
         assert any(u["cost"] == "unknown" for u in result["usage"].values())
+
+
+@pytest.mark.parametrize("operation", ["finish", "release"])
+@pytest.mark.parametrize("lock_scope", ["parent", "local"])
+async def test_cancelled_budget_settlement_is_retryable_and_idempotent(operation, lock_scope):
+    """Review regression: popping a parent identity before awaiting leaked reserves."""
+    import asyncio
+    from decimal import Decimal
+
+    from incident_investigator.grading.budget import RunSpendGuard, SpendGuard
+
+    parent = SpendGuard(0, ".10")
+    run = RunSpendGuard(parent, ".05")
+    ident = await run.reserve(Decimal(".02"))
+    lock = parent.lock if lock_scope == "parent" else run.lock
+    await lock.acquire()
+    coroutine = run.finish(ident, ".001") if operation == "finish" else run.release(ident)
+    settlement = asyncio.create_task(coroutine)
+    await asyncio.sleep(0)
+    assert not settlement.done()
+    settlement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await settlement
+    lock.release()
+    # Same cleanup used after a cancelled BoundedModel.complete: missing usage
+    # remains conservatively reserved without replacing cancellation with KeyError.
+    await run.finish(ident, None)
+    await run.finish(ident, None)
+    await run.release(ident)
+    assert not parent.active and not run.active and not run.parent_ids
+    assert len(parent.records) == len(run.records) == 1

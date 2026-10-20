@@ -55,7 +55,9 @@ class SpendGuard:
     async def finish(self, ident, cost, *, source="response"):
         cost = amount(cost) if cost is not None else None
         async with self.lock:
-            bound = self.active.pop(ident)
+            bound = self.active.pop(ident, None)
+            if bound is None:
+                return
             if cost is None:
                 self.unknown += bound
             else:
@@ -74,8 +76,9 @@ class SpendGuard:
 
     async def release(self, ident):
         async with self.lock:
-            bound = self.active.pop(ident)
-            self.records.append({"reservation": str(bound), "cost": "unbilled_failure"})
+            bound = self.active.pop(ident, None)
+            if bound is not None:
+                self.records.append({"reservation": str(bound), "cost": "unbilled_failure"})
 
     def snapshot(self):
         return {
@@ -173,12 +176,20 @@ class RunSpendGuard(SpendGuard):
         return ident
 
     async def finish(self, ident, cost, *, source="response"):
-        await self.parent.finish(self.parent_ids.pop(ident), cost, source=source)
+        parent_id = self.parent_ids.get(ident)
+        if parent_id is None:
+            return
+        await self.parent.finish(parent_id, cost, source=source)
         await super().finish(ident, cost, source=source)
+        self.parent_ids.pop(ident, None)
 
     async def release(self, ident):
-        await self.parent.release(self.parent_ids.pop(ident))
+        parent_id = self.parent_ids.get(ident)
+        if parent_id is None:
+            return
+        await self.parent.release(parent_id)
         await super().release(ident)
+        self.parent_ids.pop(ident, None)
 
 
 class BoundedModel:
