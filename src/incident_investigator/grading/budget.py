@@ -165,6 +165,7 @@ class RunSpendGuard(SpendGuard):
         super().__init__(0, cap)
         self.parent = parent
         self.parent_ids = {}
+        self.pending = {}
 
     async def reserve(self, bound):
         ident = await super().reserve(bound)
@@ -176,20 +177,26 @@ class RunSpendGuard(SpendGuard):
         return ident
 
     async def finish(self, ident, cost, *, source="response"):
-        parent_id = self.parent_ids.get(ident)
-        if parent_id is None:
-            return
-        await self.parent.finish(parent_id, cost, source=source)
-        await super().finish(ident, cost, source=source)
-        self.parent_ids.pop(ident, None)
+        await self._settle(ident, "finish", cost, source)
 
     async def release(self, ident):
+        await self._settle(ident, "release")
+
+    async def _settle(self, ident, operation, cost=None, source="response"):
         parent_id = self.parent_ids.get(ident)
         if parent_id is None:
             return
-        await self.parent.release(parent_id)
-        await super().release(ident)
+        # Cancellation may leave only one guard settled. Cleanup must replay the
+        # original operation, including known billing, until both have settled.
+        operation, cost, source = self.pending.setdefault(ident, (operation, cost, source))
+        if operation == "release":
+            await self.parent.release(parent_id)
+            await super().release(ident)
+        else:
+            await self.parent.finish(parent_id, cost, source=source)
+            await super().finish(ident, cost, source=source)
         self.parent_ids.pop(ident, None)
+        self.pending.pop(ident, None)
 
 
 class BoundedModel:
@@ -241,14 +248,19 @@ class BoundedModel:
         try:
             result = await self.adapter.complete(messages, schema)
         except ModelCallError as exc:
-            if (
-                exc.before_send
-                or exc.before_response
-                or (exc.status is not None and 400 <= exc.status < 600)
-            ):
-                await self.guard.release(ident)
-            else:
-                await self.guard.finish(ident, None)
+            try:
+                if (
+                    exc.before_send
+                    or exc.before_response
+                    or (exc.status is not None and 400 <= exc.status < 600)
+                ):
+                    await self.guard.release(ident)
+                else:
+                    await self.guard.finish(ident, None)
+            except BaseException:
+                if ident in self.guard.active:
+                    await self.guard.finish(ident, None)
+                raise
             raise
         except BaseException:
             await self.guard.finish(ident, None)

@@ -560,7 +560,11 @@ async def test_cancelled_budget_settlement_is_retryable_and_idempotent(operation
     ident = await run.reserve(Decimal(".02"))
     lock = parent.lock if lock_scope == "parent" else run.lock
     await lock.acquire()
-    coroutine = run.finish(ident, ".001") if operation == "finish" else run.release(ident)
+    coroutine = (
+        run.finish(ident, ".001", source="generation")
+        if operation == "finish"
+        else run.release(ident)
+    )
     settlement = asyncio.create_task(coroutine)
     await asyncio.sleep(0)
     assert not settlement.done()
@@ -568,13 +572,65 @@ async def test_cancelled_budget_settlement_is_retryable_and_idempotent(operation
     with pytest.raises(asyncio.CancelledError):
         await settlement
     lock.release()
-    # Same cleanup used after a cancelled BoundedModel.complete: missing usage
-    # remains conservatively reserved without replacing cancellation with KeyError.
+    # BoundedModel's unknown-cost cleanup must replay the original operation.
     await run.finish(ident, None)
     await run.finish(ident, None)
     await run.release(ident)
-    assert not parent.active and not run.active and not run.parent_ids
+    assert not parent.active and not run.active and not run.parent_ids and not run.pending
     assert len(parent.records) == len(run.records) == 1
+    expected_cost = Decimal(".001") if operation == "finish" else Decimal(0)
+    assert parent.returned == run.returned == expected_cost
+    assert parent.unknown == run.unknown == 0
+    assert parent.records == run.records
+    if operation == "finish":
+        assert run.records[0]["source"] == "generation"
+    # A retained unknown bound would wrongly refuse this otherwise affordable call.
+    successor = await run.reserve(Decimal(".049"))
+    await run.release(successor)
+    assert not parent.active and not run.active and not run.parent_ids and not run.pending
+
+
+async def test_cancelled_unbilled_release_preserves_cancellation_and_zero_charge():
+    import asyncio
+
+    from incident_investigator.grading.budget import BoundedModel, RunSpendGuard, SpendGuard
+    from incident_investigator.models import ModelCallError, OpenRouterModel
+
+    parent = SpendGuard(0, ".10")
+    run = RunSpendGuard(parent, ".05")
+    entered = asyncio.Event()
+
+    class Adapter:
+        build_request = staticmethod(OpenRouterModel.build_request)
+
+        def model_for_role(self, role):
+            return "test/model"
+
+        async def complete(self, messages, schema):
+            await run.lock.acquire()
+            entered.set()
+            raise ModelCallError("unbilled refusal", retryable=False, before_send=True)
+
+    bounded = BoundedModel(
+        Adapter(),
+        {
+            "test/model": {
+                "context_length": 100000,
+                "pricing": {"prompt": ".000001", "completion": ".000001"},
+            }
+        },
+        run,
+    )
+    task = asyncio.create_task(bounded.complete([], {}))
+    await entered.wait()
+    task.cancel()
+    run.lock.release()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not run.pending and not run.parent_ids and not run.active and not parent.active
+    assert run.charged() == parent.charged() == 0
+    assert run.records == parent.records
+    assert run.records[0]["cost"] == "unbilled_failure"
 
 
 async def test_suite_timeout_propagates_to_runtime_adapter_and_manifest(tmp_path, monkeypatch):
