@@ -149,6 +149,47 @@ def test_grade_overlay_uses_newest_timestamp(repo):
     assert repo.runs.runs()[0]["verdict"] == "inconclusive"
 
 
+@pytest.mark.parametrize(
+    ("error", "before_send", "expected"),
+    [
+        ("ModelCallError: suite input token limit refused call", False, 0.01),
+        ("ModelCallError: suite budget reservation refused call", False, 0.01),
+        ("ModelCallError: explicit local refusal", True, 0.01),
+        ("ModelCallError: request timed out", False, None),
+    ],
+)
+def test_pre_send_refusal_cost_in_run_and_saved_grading_suite(repo, error, before_send, expected):
+    store = repo.artifacts
+    store.save_json(
+        "runs/r/result.json",
+        {
+            "run_id": "r",
+            "usage": {"role": {"cost": "unknown"}},
+            "state": {"calls": {"paid": {"kind": "model"}, "refused": {"kind": "model"}}},
+            "receipts": {
+                "paid": {"usage": {"cost": 0.01}},
+                "refused": {"error": error, "before_send": before_send},
+            },
+        },
+    )
+    store.save_json("suites/eval/leaderboard.json", {})
+    store.save_json(
+        "suites/eval/input/grade.json",
+        {"run_id": "r", "verdict": "correct", "resources": {"totals": {"cost": None}}},
+    )
+    repo.runs.refresh()
+    run = repo.runs.runs()[0]
+    assert run["cost"] == expected
+    suite = repo.runs.suites()[0]
+    assert repo.runs.runs({"suite": suite["id"]})[0]["cost"] == expected
+    with TestClient(create_console(repo)) as client:
+        for url in (f"/runs/{run['id']}", f"/suites/{suite['id']}"):
+            page = client.get(url)
+            assert page.status_code == 200
+            if expected is not None:
+                assert "0.01" in page.text
+
+
 def test_each_suite_uses_its_retained_grade_without_duplicating_investigation(repo):
     store = repo.artifacts
     store.save_json("suites/original/result/result.json", {"run_id": "same-investigation"})

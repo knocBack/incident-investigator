@@ -29,6 +29,24 @@ def identity(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:20]
 
 
+def recorded_cost(result):
+    cost = total(list(result.get("usage", {}).values()), "cost")
+    if cost is not None:
+        return cost
+    costs = []
+    for call_id, call in result.get("state", {}).get("calls", {}).items():
+        if call.get("kind") != "model":
+            continue
+        receipt = result.get("receipts", {}).get(call_id, {})
+        # Older local budget refusals predate explicit before_send receipts.
+        refused = receipt.get("before_send") is True or receipt.get("error") in {
+            "ModelCallError: suite input token limit refused call",
+            "ModelCallError: suite budget reservation refused call",
+        }
+        costs.append({"cost": 0.0 if refused else (receipt.get("usage") or {}).get("cost")})
+    return total(costs, "cost")
+
+
 class ArtifactStore(ABC):
     @abstractmethod
     def read(self, key: str) -> bytes | None: ...
@@ -349,7 +367,7 @@ class IndexedRunRepository(RunRepository):
                     ),
                     "verdict": grade.get("verdict", "ungraded"),
                     "grade": grade,
-                    "cost": total(usage, "cost"),
+                    "cost": recorded_cost(result),
                     "input_tokens": total(usage, "input_tokens"),
                     "output_tokens": total(usage, "output_tokens"),
                     "calls": len(result.get("state", {}).get("calls", {})),
@@ -417,7 +435,9 @@ class IndexedRunRepository(RunRepository):
                 "suite_name": suite["name"],
             }
             for field in ("cost", "input_tokens", "output_tokens"):
-                if field in totals:
+                if field in totals and (
+                    field != "cost" or totals[field] is not None or attempt[field] is None
+                ):
                     attempt[field] = totals[field]
             if "wall_seconds" in resources:
                 attempt["wall_seconds"] = resources["wall_seconds"]

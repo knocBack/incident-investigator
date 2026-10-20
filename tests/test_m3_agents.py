@@ -714,6 +714,29 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("before_send", [True, False])
+async def test_pre_send_refusal_exports_zero_usage_without_hiding_unknown_cost(
+    tmp_path, before_send
+):
+    from incident_investigator.models import ModelCallError
+
+    class Refused:
+        async def complete(self, messages, schema):
+            raise ModelCallError(
+                "synthetic refusal", retryable=False, before_response=True, before_send=before_send
+            )
+
+    directory = await investigate(load_snapshot("dev-00"), Refused(), tmp_path)
+    result = read_result(directory)
+    receipt = next(iter(result["receipts"].values()))
+    if before_send:
+        assert receipt["usage"] == {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        assert result["usage"]["orchestrator"]["cost"] == 0
+    else:
+        assert receipt["usage"] is None
+        assert result["usage"]["orchestrator"]["cost"] == "unknown"
+
+
 @pytest.mark.parametrize("decision_index", [0, 1])
 @pytest.mark.usefixtures("runtime_graph")
 async def test_live_demo_2_decisions_are_repaired_into_reports(tmp_path, decision_index):

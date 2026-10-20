@@ -130,8 +130,21 @@ async def test_cap_refuses_before_paid_request(monkeypatch):
         raise AssertionError("no HTTP request should be sent")
 
     model, guard = bounded(monkeypatch, forbidden, cap=".0001")
-    with pytest.raises(ModelCallError, match="reservation refused"):
+    with pytest.raises(ModelCallError, match="reservation refused") as error:
         await model.complete([], {})
+    assert error.value.before_send
+    assert guard.charged() == 0 and not guard.active
+
+
+async def test_input_limit_refuses_before_paid_request(monkeypatch):
+    async def forbidden(request):
+        raise AssertionError("no HTTP request should be sent")
+
+    model, guard = bounded(monkeypatch, forbidden)
+    model.max_input_tokens = 1
+    with pytest.raises(ModelCallError, match="input token limit refused") as error:
+        await model.complete([], {})
+    assert error.value.before_send
     assert guard.charged() == 0 and not guard.active
 
 

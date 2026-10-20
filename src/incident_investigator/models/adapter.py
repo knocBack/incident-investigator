@@ -41,11 +41,13 @@ class ModelCallError(RuntimeError):
         retryable: bool,
         status: int | None = None,
         before_response: bool = False,
+        before_send: bool = False,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
         self.before_response = before_response
+        self.before_send = before_send
 
 
 class ModelAdapter(Protocol):

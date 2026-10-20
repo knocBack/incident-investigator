@@ -27,7 +27,7 @@ from incident_investigator.contracts import (
     action_type,
 )
 from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
-from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
+from incident_investigator.models import CodexExecModel, ModelAdapter, ModelCallError, ScriptedModel
 from incident_investigator.reliability import (
     invocation_lock,
     resume_metadata,
@@ -915,6 +915,9 @@ class Investigation:
         except Exception as exc:
             receipt["error"] = f"{type(exc).__name__}: {exc}"
             receipt["retryable"] = getattr(exc, "retryable", True)
+            if call.kind == "model" and isinstance(exc, ModelCallError) and exc.before_send:
+                receipt["before_send"] = True
+                receipt["usage"] = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
         self.observer.output(span, receipt)
         receipt["latency_ms"] = round((time.monotonic() - started) * 1000, 3)
         self.trace(
