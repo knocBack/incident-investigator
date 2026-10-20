@@ -61,7 +61,7 @@ def test_staged_topology_exposes_stage_order_and_role_call_loops(tmp_path):
     assert ("gathering:tool", "gathering:commit") in edges
 
 
-@pytest.mark.parametrize("variant", ["hub", "staged"])
+@pytest.mark.parametrize("variant", ["staged"])
 async def test_resume_does_not_repeat_completed_model_or_tool_calls(tmp_path, variant):
     class Crash(Scenario):
         crashed = False
@@ -103,7 +103,7 @@ async def test_resume_does_not_repeat_completed_model_or_tool_calls(tmp_path, va
 
 async def test_graph_labels_flow_through_results_trace_grades_and_leaderboard(tmp_path):
     grades = []
-    for variant in ("hub", "staged"):
+    for variant in ("staged",):
         directory = await investigate(
             load_snapshot("dev-00"),
             Scenario(followup=False),
@@ -119,12 +119,12 @@ async def test_graph_labels_flow_through_results_trace_grades_and_leaderboard(tm
         grades.append(grade_run(directory, expectation("bad_configuration")))
     board = leaderboard(grades, tmp_path / "board")
     # Regression after concurrency/pass-metrics integration: standalone grades
-    # have no suite_attempt; aggregating them must still retain both graph groups.
-    assert {row["graph"] for row in board["models"]} == {"hub", "staged"}
+    # have no suite_attempt; aggregating them must still retain the recorded graph group.
+    assert {row["graph"] for row in board["models"]} == {"staged"}
     assert all(row["runs"] == 1 for row in board["models"])
 
 
-@pytest.mark.parametrize("variant", [None, "staged", "hub"])
+@pytest.mark.parametrize("variant", [None, "staged"])
 @pytest.mark.parametrize("command", ["investigate", "demo"])
 def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
     from incident_investigator.cli import main
@@ -169,13 +169,7 @@ def test_cli_selects_graph(tmp_path, monkeypatch, capsys, variant, command):
     assert board["models"][0]["graph"] == (variant or "staged")
 
 
-async def test_api_and_control_default_to_staged(tmp_path, monkeypatch):
-    from incident_investigator import hub
-
-    def forbidden(*args):
-        raise AssertionError("default construction must not build the legacy hub")
-
-    monkeypatch.setattr(hub, "build_hub_graph", forbidden)
+async def test_api_and_control_default_to_staged(tmp_path):
     control = Control(run_id="default", case_id="dev-00", limits=Limits())
     assert control.graph == "staged"
     investigation = Investigation(
@@ -187,8 +181,8 @@ async def test_api_and_control_default_to_staged(tmp_path, monkeypatch):
     assert result["graph"] == result["state"]["graph"] == "staged"
 
 
-@pytest.mark.parametrize("variant", [None, "hub"])
-def test_eval_suite_defaults_to_staged_and_supports_legacy_opt_in(
+@pytest.mark.parametrize("variant", [None, "staged"])
+def test_eval_suite_uses_staged(
     tmp_path,
     monkeypatch,
     variant,
@@ -226,7 +220,7 @@ def test_eval_suite_defaults_to_staged_and_supports_legacy_opt_in(
 
 
 @pytest.mark.parametrize("command", ["investigate", "demo", "eval-suite"])
-def test_graph_help_names_default_and_deprecated_option(monkeypatch, capsys, command):
+def test_graph_help_names_only_supported_workflow(monkeypatch, capsys, command):
     from incident_investigator.cli import main
 
     monkeypatch.setattr("sys.argv", ["incident-investigator", command, "--help"])
@@ -234,6 +228,19 @@ def test_graph_help_names_default_and_deprecated_option(monkeypatch, capsys, com
         main()
     assert exc.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "--graph {staged,hub}" in help_text
-    assert "staged (default)" in help_text
-    assert "hub: deprecated; removed if final evaluation shows no difference" in help_text
+    assert "--graph {staged}" in help_text
+    assert "only supported workflow" in help_text
+
+
+@pytest.mark.parametrize("command", ["investigate", "demo", "eval-suite"])
+def test_cli_rejects_removed_graph(command):
+    from incident_investigator.cli import build_parser
+
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args([command, "--graph", "hub"])
+    assert exc.value.code == 2
+
+
+def test_api_rejects_removed_graph(tmp_path):
+    with pytest.raises(ValueError, match="unknown graph"):
+        runner(tmp_path, "hub")

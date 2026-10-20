@@ -1,206 +1,73 @@
-# LLD-02: retrieval contracts and local execution preflight
+# Frozen evidence tool contracts
 
-Status: specified on 2026-10-19 under the authorized LLD-02 plan. The project selected frozen JSONL fixtures. This checkpoint saves contracts and a concrete [controlled-test configuration](../config/local-double.json); it does not implement retrieval functions, scenario fixtures, a runtime, or a test runner. Dependency resolution subsequently succeeded; the lockfile records adopted pins. [LLD-01](lld.md) owns task/call/result lifecycle; this document fills its source/query/page/fault contracts and local settings. Open product decisions are consolidated in the [LLD handoff](lld.md#8-remaining-contracts-and-decision-gates).
+The loader and tool registry expose validated snapshot records, not filesystem paths or live service access. [Runtime contracts](lld.md) own call admission, retries, counters and acceptance. Tool input/output schemas live in `tools/contracts.py`; source payloads live in `telemetry/models.py`.
 
-## 1. Reuse and module boundary
+## Source boundary
 
-Use **Ports & Adapters**: five typed retrieval functions behind a small registry bind the runtime to the synthetic source snapshot. The snapshot loader owns source validation; each query function owns its source-specific predicates and result normalization. Agents choose tool names/filters, not backend operations or file locations.
+`load_snapshot` selects one registered case from a manifest containing alert, observation and fault-plan paths. Paths must stay inside the configured source root; symlinks and duplicate source identities are rejected. The loader does not scan the repository or load evaluator expectations.
 
-Use Pydantic models for request/result validation and generated JSON schemas. Reuse native typed-tool wrappers (`langchain_core.tools.StructuredTool`) for callable/schema integration, LangGraph `Send` and its SQLite checkpointer for graph dispatch/persistence, and `asyncio.timeout`/`Semaphore` for bounded waits/capacity. Keep one admitted external operation per call node as LLD-01 requires. A shared **Decorator-style async wrapper** applies the runtime's already-selected fault around a retrieval function; it never owns counters or commits state.
+Each authored record has a source, source record ID, event time, availability time and typed data. Supported sources are logs, metrics, changes, dependencies and history. Timestamps must have offsets and normalize to UTC. Metric windows, units and aggregation context remain explicit. Non-finite values and invalid envelopes fail validation.
 
-Use a dictionary from the tool names (the five source tools plus the §9 discovery, aggregation and correlation tools) to their definitions. Do not introduce a generic query language, custom tool framework, backend Strategy hierarchy, ORM, or another scheduler. There is one source implementation; narrow functions suffice. Native wrappers do not replace our invocation guards, provenance checks, or durable admission/acceptance rules.
+The loader computes a canonical dataset digest over the normalized alert, observations and fault plan. Runtime evidence IDs combine that identity with source identity. File edits cannot change an already-loaded snapshot. Resume reloads retained sources and verifies versions before external work. Tools serialize fresh response copies so a consumer cannot mutate the underlying data.
 
-Logical interfaces:
+Every query enforces the incident cutoff, including availability time. A record backdated before the cutoff but published afterward remains hidden. Metric windows must fit the query interval. Ordinary intervals are half-open, except that evidence exactly at the incident cutoff is included. Missing data is not a healthy reading.
 
-```text
-load_snapshot(registered_case, expected_digest?) -> CaseSnapshot
-normalize_query(tool_name, arguments, bound_context) -> NormalizedQuery
-query_source(snapshot, normalized_query) -> ToolPage
-apply_fault(query_callable, saved_fault_selection) -> wrapped_callable
-```
+## Retrieval tools
 
-The runner binds `case_id`, snapshot, cutoff, and current incident identity to the callable. None is an agent-supplied tool argument. Definitions expose only the selected query schema and description. Tool functions cannot modify task status, budgets, faults, or graph state; `execute_call` and the serialized controller retain those responsibilities.
+Paged tools default to 50 rows, with a maximum of 100. Unknown fields and invalid context-dependent bounds are rejected. `service` selects checkout, inventory or database. Time arguments require an offset.
 
-## 2. Authored sources and immutable snapshots
-
-Register opaque case IDs through an explicit manifest. A case entry names its alert JSON, observation JSONL, and fault-plan JSON within the configured source root. Resolve only those files; reject unknown case IDs, duplicate entries, paths outside the source root, and symlinks. Do not walk the repository or load evaluator directories. Evaluator expectations/graders stay separately registered with the evaluator and never enter this loader.
-
-Each JSONL row is `SourceObservation` with exactly `source`, `source_record_id`, `event_time`, `available_at`, and `data`. `source` is one of the five tool categories; `data` is its typed payload below. Authored rows have no `dataset_digest` or `evidence_id`, avoiding a circular hash. Reject unknown envelope/payload fields, duplicate `(source, source_record_id)`, non-finite numbers, naive timestamps, inconsistent metric windows, and records outside the configured byte bounds. All five categories are registered even when some contain zero rows.
-
-Load and validate once into a private, read-only snapshot owned by the runner. Normalize aware timestamps to UTC. Compute `dataset_digest = SHA256(canonical_json({schema_version, alert, observations, fault_plan}))`, sorting observations by `(source, source_record_id)` and fault rules by `rule_id`. Preserve meaningful array order inside records. Use LLD-01 canonical JSON. This digest identifies the selected case snapshot; a comparison batch records the map of case IDs to their digests.
-
-Add `dataset_digest` and LLD-01's derived `evidence_id` to create runtime `Observation` records. Different content under an already registered source identity is an integrity error. Reordering JSONL lines or object keys alone does not change normalized content. Case content, cutoff, and fault-plan changes do. Prompt/tool/runtime/dependency versions remain separate compatibility identities.
-
-Query functions never mutate snapshot objects and serialize fresh response copies; do not rely on Pydantic's shallow frozen setting to protect nested dictionaries. A caller mutating a returned page must not change subsequent retrieval. Source-file edits after loading cannot change an active run's in-memory snapshot. Before resume, reload/verify the registered content and compare the recorded digest before checkpointer setup or new investigation work. Never silently replace saved observations.
-
-The execution clock is used for deadlines and timings only. Evidence eligibility uses the fixed incident cutoff: `available_at <= cutoff`, plus the source-specific event/as-of rules below. `available_at` means retrievable from the source, which may be later than event occurrence or collector observation. There is no moving simulation clock. Earlier incidents may contain their recorded explanations/resolutions; the active incident's eventual postmortem is excluded by incident identity and availability.
-
-## 3. Source payloads and query models
-
-`Service` is `checkout|inventory|database`. Query strings must be nonempty when supplied; trim identifiers, normalize service/severity enums, preserve case for version/operation/correlation/metric identifiers. Optional filters default to null. Supplied filters combine with AND. `text_contains` is a trimmed, case-folded literal substring, not regex, SQL, semantic search, or a query language. Reject unexpected query fields. Bound filter strings to 256 characters, source-record IDs to 128 characters, and encoded cursors to 2,048 bytes so query/cursor metadata fits a bounded page. Canonical serialization uses Python JSON with sorted keys, compact separators, `ensure_ascii=False`, and `allow_nan=False`; normalize UTC timestamps to six fractional digits and `Z` before hashing.
-
-### Source payloads
-
-All fields listed are required; nullable fields use null and collection fields may be empty. `JSONScalar` has LLD-01's meaning. Values in `attributes` preserve operational context such as target address, lock/pool ownership, attempt counts, or measurement numerators; they are source observations, never evaluator answers.
-
-| Source | `data` payload |
+| Tool | Filters and behavior |
 | --- | --- |
-| Logs | `service: Service`, `severity: TRACE\|DEBUG\|INFO\|WARN\|ERROR\|FATAL`, `body: str`, nullable `version`, `operation`, `request_id`, `trace_id`, `transaction_id` strings, `attributes: dict[str, JSONScalar]`. |
-| Metrics | `service: Service`, `name: str`, `value: finite number`, `unit: str`, `aggregation: gauge\|count\|sum\|rate\|mean\|p50\|p95\|p99`, nullable UTC `window_start`/`window_end`, nullable `version`/`operation` strings, `sample_count: int\|null`, `attributes: dict[str, JSONScalar]`. Counts are nonnegative. |
-| Changes | `service: Service`, `change_kind: deployment\|configuration`, `version: str\|null`, `description: str`, `changes: list[{key: str, before: JSONValue, after: JSONValue}]`, `attributes: dict[str, JSONScalar]`. `JSONValue` is finite JSON, including nested objects/lists. Deployment differences may use `changes`; configuration values remain raw differences. |
-| Dependencies | `service: Service`, `targets: list[Service]`. Each observation is one complete observed topology snapshot for that service at `event_time`, with unique sorted targets. Empty targets is an observed empty topology; no matching observation is missing coverage. |
-| History | `incident_id: str`, `services: list[Service]`, `title: str`, `summary: str`, `symptoms: list[str]`, nullable `root_cause`/`resolution` strings. Services are nonempty, unique, and sorted. `event_time` is the earlier incident's occurrence and `available_at` its source-publication time. |
+| `logs` | Service/time, severity, version, operation, request ID, trace ID, transaction ID and body substring |
+| `metrics` | Service/time, metric name, recorded window size, version and operation; preserves authored units and aggregations |
+| `changes` | Service/time, deployment/configuration kind and version; returns raw change records |
+| `dependencies` | Service and optional as-of time; returns the latest available one-hop snapshot, without pagination |
+| `history` | Service membership, event interval and case-insensitive substring; excludes the current incident and later-published history |
 
-Point metrics have both window fields null and use `event_time`. Windowed metrics have start < end, `event_time == window_end`, and `available_at >= window_end`. Preserve the authored unit, aggregation, sample count, and window; do not interpolate, re-bucket, or aggregate measurements on demand. Fixture checks must reconcile counts/rates and weighted summaries.
+Logs, metrics and changes default to the alert window start and cutoff. History has no default lower bound. Explicit future end/as-of bounds are errors rather than silently widened queries. A complete empty page establishes only that the query found no matching records.
 
-### Query arguments
+## Discovery, aggregation and correlation
 
-Logs, metrics, changes, and history share `service: Service`, nullable UTC `start`/`end`, `limit: int = 50`, and nullable `cursor: str`. For logs/metrics/changes, missing start/end resolve to alert-window start and cutoff. For history, missing start means no lower bound and missing end resolves to cutoff. Require start < end when start exists, and end <= cutoff. Reject future bounds instead of silently clamping them. A start earlier than the alert is permitted for baseline investigation.
+| Tool | Input | Output |
+| --- | --- | --- |
+| `catalog` | Optional service | Names and summaries of available services, metrics, templates, versions, changes, dependencies, history and enum values |
+| `log_counts` | Optional service/time/severity/text, grouping fields, attribute and time bucket | Counts by group, first/last times and bounded citable exemplars |
+| `metric_stats` | Optional service/time/name/window and split time | Recorded-series statistics and before/after split summaries, with peak-sample exemplars |
+| `trace_logs` | Trace ID and/or request ID, optional time/page filters | Correlated logs across services |
 
-| Tool | Additional filters and actual retrieval behavior |
+These helpers have no default lower time bound, so pre-alert baselines remain visible. Aggregation derives summaries from existing records; it does not interpolate or rewrite measurements. Derived pages are bounded and can detach exemplars or fail with a request to narrow the query. A derived summary does not establish complete-empty query coverage or manufacture an application-cause observation.
+
+Observability may use catalog, logs, log_counts, trace_logs, metrics, metric_stats and history. Dependency may use catalog, dependencies, changes, history, log_counts and metric_stats. Other roles cannot retrieve evidence. The allowed registry schemas are supplied in each specialist's context.
+
+## Page and pagination contract
+
+A `ToolPage` includes tool name, dataset digest, normalized query/key, cutoff, source status, observations, available match count, next cursor, error and optional derived summary.
+
+| Status | Contract |
 | --- | --- |
-| `logs` | Nullable `severity`, `version`, `operation`, `request_id`, `trace_id`, `transaction_id`, `text_contains`. Match service and `start <= event_time < end`, then exact fields and body substring. |
-| `metrics` | Nullable `metric_name`, positive integer `window_seconds`, `version`, `operation`. Point samples use the event interval. Windowed samples must fit wholly within `[start, end]`; a window ending exactly at end is allowed. `window_seconds` matches recorded window duration and excludes point samples. |
-| `changes` | Nullable `change_kind`, `version`. Match service, event interval, kind, and version; return actual deployment/configuration records. |
-| `dependencies` | Only `service` and nullable UTC `as_of`, defaulting to cutoff. Require as_of <= cutoff. Return the latest snapshot satisfying `event_time <= as_of` and `available_at <= as_of`. Duplicate snapshot timestamps for one service are fixture-integrity errors. Return one hop; agents can query another service separately. No pagination arguments. |
-| `history` | Nullable `text_contains`, matched within any individual title, summary, symptom, root-cause, or resolution string after case folding. Match service membership and incident event interval, require publication by cutoff, and exclude `incident_id == bound case_id`. Never return private case expectations. |
+| `complete` | Known eligible matches; exact count before pagination; a cursor means more records remain |
+| `partial` | Some unchanged records may survive, but count/cursor are unknown and an incomplete-source error explains the gap |
+| `failed` | No observations, unknown count/cursor and an explicit source error |
 
-Every source also enforces cutoff availability. One case namespace cannot query another's observations. A complete query with no matching records returns an empty page; it does not establish a healthy application. No snapshot for dependencies is similarly an empty retrieval, not evidence that the service has no dependencies.
+Paged results sort by event time and source record ID. A bounded encoded cursor binds dataset, normalized query and last eligible sort key. Wrong-query, wrong-dataset, malformed or nonexistent-position cursors fail. A cursor cannot bypass cutoff or filtering. Page, observation and snapshot byte limits are enforced in addition to row limits.
 
-## 4. Normalization, pages, and coverage
+The query key includes tool-contract version, tool, normalized filters, dataset and cutoff. Page size and cursor are separate from whole-query identity. The runtime's exact-query deduplication also includes page size/cursor; it returns an earlier complete receipt without a fresh tool charge. Failed and partial pages remain eligible for further attempts.
 
-`NormalizedQuery` has `tool`, resolved `filters` (including service/time or as-of), `dataset_digest`, `cutoff`, `query_key`, `limit`, and `cursor`. The `query_key` hashes canonical `{tool_contract_version, tool, resolved_filters, dataset_digest, cutoff}`; the initial contract version is `tool-contract.v1`. Exclude limit/cursor so changing page size or replaying a page cannot create new full-query coverage. Normalize timestamp offsets and nullable defaults before hashing; text search uses its normalized substring. Keep distinct metric name/window scopes. Dependencies normalize to limit 1 and cursor null internally. Do not semantically deduplicate arbitrary natural-language questions.
+Coverage tracks accepted evidence and known matching counts. New evidence or the first complete-empty retrieval can advance runtime progress. A final page alone, a replayed receipt or changed prose cannot establish new progress. [Runtime contracts](lld.md#limits-and-closure) define review/no-progress closure.
 
-```text
-ToolPage = {
-  "tool": ToolName,
-  "dataset_digest": str,
-  "query_key": str,
-  "query": resolved_filters,
-  "cutoff": UTC,
-  "source_status": "complete" | "partial" | "failed",
-  "observations": [Observation, ...],
-  "available_match_count": int | null,
-  "next_cursor": str | null,
-  "error": Failure | null
-}
-```
+## Controlled tool faults
 
-`source_status` describes source retrieval, not coverage of the entire query or success of its owning task:
+A snapshot fault plan contains uniquely identified rules bound to a tool/service and optional overlapping time scope. Steps select normal, timeout or partial behavior; partial steps specify how many whole observations to retain. A schedule ends in normal behavior after its steps are consumed. These are retrieval faults, distinct from the application's injected cause.
 
-| Outcome | Contract |
-| --- | --- |
-| Complete source page | All eligible matches are known to the adapter; count is their exact total before pagination. Error is null. A next cursor means more matching records remain. Empty + count zero is complete-empty retrieval. |
-| Partial source | Some observations may be returned unchanged, but coverage is uncertain. Count/cursor are null and error identifies incomplete retrieval. Partial results do not automatically retry; the agent can ask for more evidence within limits. |
-| Failed source | Observations are empty, count/cursor are null, and error identifies the failure. Eligible transient timeouts follow the runtime's bounded retry policy. Failure is never an application-cause observation. |
+Runtime selects and checkpoints a step at call admission, increments the saved rule counter and binds the selection to the call. Different query filters do not reset the schedule. A new retry consumes a new step; replaying saved work does not. Fresh investigations have independent counters.
 
-Sort paginated matches by `(event_time, source_record_id)` ascending. Use standard keyset pagination with a bounded base64url JSON cursor containing `version: 1`, dataset digest, query key, and the last returned sort key. Parse/validate it using the same Pydantic boundary mechanism; never deserialize executable objects. Reject wrong query/snapshot, malformed encoding, or a last key absent from that query's eligible matches. Apply filters/cutoff before cursor selection. A cursor is a continuation position, not permission to bypass filtering.
+The wrapper only applies the saved selection. Timeout cooperates with the ordinary call deadline. Partial mode retains unchanged records but clears count/cursor and adds an incomplete-source error. It never edits a measurement into a healthy or zero value. Bounded transient failures can retry; persistent failure remains a report gap. Cancellation, replay eligibility and recovery remain runtime responsibilities.
 
-Return the largest prefix fitting requested record count and the complete page's serialized byte bound, then issue the cursor after its last record. Include envelope/cursor overhead in size checks. Enforce record bounds during load so one valid observation plus envelope can fit the page. Invalid queries/cursors or an impossible response bound return a structured error rather than silently omitting evidence. Dependencies return at most one bounded record and no cursor.
-
-Validate query models and context-dependent bounds before admitting a tool batch. A validation failure is bounded correction feedback, not a dispatched tool call. An error discovered during an admitted call, such as a cursor position absent from the eligible records, produces a failed `ToolPage` bound to its already normalized query. No invalid argument fallback may invoke a different tool or widen the query.
-
-Add `query_coverage: dict[query_key, QueryCoverage]` to LLD-01 control state when tool receipt acceptance is implemented. `QueryCoverage` contains `seen_evidence_ids: list[str]` (unique sorted), `expected_matches: int|null`, and `completion_receipt_id: str|null`. Include only observations actually returned and accepted under this exact normalized query. A complete source page establishes the expected count; conflicting complete counts under an immutable snapshot are an integrity error. Complete coverage requires a known count and all that query's matching records returned across accepted receipts. Save the first completing receipt ID once. A final page alone, a forged continuation position, or a changed limit cannot establish it.
-
-This implements HLD-PROG-01's two progress signals: a new observation, or first complete coverage for a normalized query, including complete-empty. Duplicate observations/receipts and changed prose do not create progress. Coverage is checkpointed with receipt processing, so replay cannot count it again. Review-round counters/thresholds remain the later coordination contract; these source records do not claim diagnostic progress.
-
-## 5. Fault wrapper and execution accounting
-
-`FaultPlan` contains `rules: list[FaultRule]`. A rule has `rule_id: str`, `tool: ToolName`, `service: Service`, nullable UTC `window_start`/`window_end` (both null or both present), and `steps: list[FaultStep]`. Steps have `outcome: none|timeout|partial` and `keep_first: int|null`; a partial step requires a nonnegative count, and other outcomes require null. After listed steps, use `none`. Validate unique rule IDs and at most one rule per `(tool, service)` within a case, so even a broad query cannot match competing schedules. A present rule window must have start < end.
-
-A scoped rule matches the tool/service and overlap with the half-open query interval (`query_start < rule_end` and `rule_start < query_end`); dependencies use `rule_start <= as_of < rule_end`. A history query without a lower bound uses negative infinity for this comparison. Steps are shared across matching filters/pages: changing text, time bounds within that scope, limit, or cursor must not restart a schedule.
-
-At call admission the controller uses `counter_key = SHA256(canonical_json([dataset_digest, rule_id]))`, selects the next zero-based step from its saved counter, increments that counter, and saves rule ID, counter key, step, outcome, and keep count with the admitted call in one transition. This extends LLD-01's `FaultSelection` with `rule_id` and nullable `keep_first`; the wrapper needs no mutable plan lookup. The selected fault is runtime-only, never an agent argument. Replaying admission consumes no additional step. A new call attempt consumes a new step; a proven non-dispatch does not rewind an already saved admission. Report actual fault exercise separately from a merely selected fault. Each fresh run starts independent counters.
-
-The shared wrapper receives only that saved selection:
-
-- `none`: invoke the normal query callable.
-- `timeout`: wait cooperatively inside the normal `asyncio.timeout` execution boundary until it expires; the executor records a timeout receipt. Tests use short explicit overrides/events rather than waiting ten seconds.
-- `partial`: query normally, retain at most `keep_first` whole returned observations, and return partial status with null count/cursor and a `source_incomplete` error. Do not alter individual observation data or fabricate zero measurements.
-
-The executor normalizes tool timeouts/errors to a failed `ToolPage` in the call receipt, with available timing/accounting. Runtime classifies retryability: source timeout is retryable within limits; invalid query/cursor and integrity errors are not automatically retried. Model correction is distinct from retrying the identical external operation. Cancellation and graph replay follow LLD-01; the wrapper provides neither hidden retries nor state writes.
-
-## 6. Concrete local profile
-
-[config/local-double.json](../config/local-double.json) is the source for these controlled-test settings. It is saved configuration, not a loaded/validated application profile; its loader does not exist yet. Reject use with a real model adapter. Synthetic token allowances/counts exercise accounting and are not a provider spending guarantee.
-
-| Group | Values |
-| --- | --- |
-| Tasks/retries | 16 tasks/run, 2 attempts/task, 1 retry/operation |
-| Calls/accounting | 12 model calls, 24 tool calls, 32,768 total synthetic tokens/run |
-| Capacity | 2 calls/run, 4 calls across the runner, maximum 4 requests/tool batch; support two progressing investigations |
-| Deadlines | 120 s/run, 45 s/task, 10 s/call; original task deadline survives retries/resume |
-| Payloads | Context 64 KiB, receipt 128 KiB, result 32 KiB |
-| Retrieval | Default 50 rows/page, maximum 100; complete page 32 KiB, observation 8 KiB, source snapshot 8 MiB |
-| Fake model request | Input bound 2,048 tokens, output bound 1,024, reserve 3,072 per call; measured fake usage is retained separately |
-
-Page/observation/snapshot byte limits include serialized envelopes where applicable; the snapshot loader bounds both source reads and final normalized content. Fault plans and alerts count toward the snapshot bound. Cursor/query inputs are bounded by the context limit and their typed schema. Test-specific overrides remain finite and are recorded with the run. Real-model settings, validated token bounds/prices, spending caps, full-loop round/no-progress limits, and benchmark repetitions are not selected by this profile.
-
-## 7. Dependency preflight and next executable milestone
-
-Target installed CPython 3.13.13; its SQLite library reports 3.53.4. Direct dependencies are `langgraph==1.2.16`, `langgraph-checkpoint-sqlite==3.1.2`, `pydantic==2.12.5`, `pytest==9.0.2`, and `pytest-asyncio==1.3.0`. `langchain-core` is declared directly because the tool wrapper is imported. Resolution succeeded and the complete adopted set is pinned in `uv.lock`; integration validation remains separate.
-
-Historical initial resolution attempt on 2026-10-19, retained because it encountered a PyPI DNS failure:
+## Local verification
 
 ```sh
-uv --no-config pip compile --python-version 3.13 --no-python-downloads - <<'REQUIREMENTS'
-langgraph==1.2.16
-langgraph-checkpoint-sqlite==3.1.2
-pydantic==2.12.5
-langchain-core
-pytest==9.0.2
-pytest-asyncio==1.3.0
-REQUIREMENTS
+uv run python -m incident_investigator.tools
+uv run pytest -q tests/test_m2_tools.py tests/test_reliability.py -o tmp_path_retention_policy=none
 ```
 
-Outcome: a later dependency resolution succeeded on 2026-10-19. The adopted lock resolves langgraph 1.2.16, langgraph-checkpoint-sqlite 3.1.2, pydantic 2.12.5, langchain-core 1.6.12, aiosqlite 0.22.1, pytest 9.0.2, and pytest-asyncio 1.3.0. Resolution establishes compatible pins; the preflight covers imports and one synchronous checkpoint graph step, while typed-tool and pending-write integration remain pending.
-
-The first product-validation gate is a resolved dependency lock plus actual imports, native typed-tool schema/async invocation, one synchronous SQLite-backed graph transition, and successful sibling pending-write recovery with controlled doubles. The LLD-01 specialist target uses these retrieval contracts, one development incident, minimum traces, and basic guards; scripted model responses and controlled failures permit validation without provider selection or paid calls. Other role payloads/full coordination must be specified before their affected behavior. The [LLD handoff](lld.md#8-remaining-contracts-and-decision-gates) records the remaining gates. Workspace procedures are outside this product-design handoff.
-
-## 8. Verification coverage and source lessons
-
-Save this decision checkpoint before extending the evaluation specification through [incident-evals](../.agents/skills/incident-evals/SKILL.md). Reuse fixture/tool acceptance plus HLD-OWN/PROG/DUR/RUN groups. Cover query predicates, cutoff/delayed availability, history exclusion, copied responses, stable paging/byte limits, invalid cursors, complete-empty/partial/failed outcomes, source-fault scope, concurrent isolation, and resume. Keep the ten primary incidents, two variants, and human diagnostic policy unchanged. All executable cases are planned until loaders/tools/runtime and test runner exist; document checks and dependency failures are separate evidence.
-
-| Source -> problem | Project rule -> verification |
-| --- | --- |
-| [Pydantic JSON Schema](https://pydantic.dev/docs/validation/latest/concepts/json_schema/) and [native typed tools](https://docs.langchain.com/oss/python/langchain/tools): separate handwritten schemas and argument handling can drift. | Generate tool schemas from their validation models; use native typed wrappers. Check exposed schemas and actual accepted/rejected calls together. |
-| [OpenTelemetry log model](https://opentelemetry.io/docs/specs/otel/logs/data-model/): event occurrence and observation time are distinct. | Preserve occurrence plus source-availability time; the latter means queryable in this project, not automatically OTel's collector timestamp. Test an old event published after cutoff. No OTel runtime dependency is introduced. |
-| [OpenTelemetry metric model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/): a measurement includes temporal and attribute context. | Retain units/aggregation/windows and filter recorded measurements without inventing aggregation. Verify window containment and fixture reconciliation. This small payload is not a full OTLP implementation. |
-| [Python asyncio timeout](https://docs.python.org/3.13/library/asyncio-task.html#asyncio.timeout) and [pytest temporary paths](https://docs.pytest.org/en/stable/how-to/tmp_path.html): bounded async execution and isolated test artifacts have established primitives. | Reuse them for timed faults and per-test SQLite/source directories. Observe timeout/cancellation outcomes and run isolation against the real implementation. |
-
-LLD-02 checkpoint verification, before the documentation reconciliation: inline JSON checks confirmed the saved profile's fields, selected values, and finite bound relationships; no application loader exists yet. Document checks passed across seven documents and 61 local links/anchors. The incident definitions, comparison/grading policy, and all 12 earlier skill/HTML/transcript files were unchanged at that checkpoint. Executable coverage and the dependency failure are recorded in the [evaluation checkpoint](evaluation-plan.md#lld-02-checkpoint-coverage--2026-10-19); no source/runtime/diagnostic pass is claimed.
-
-## 9. Real-world data access extension (M3 quality)
-
-Accepted on 2026-10-19 after paid demo runs showed agents guessing metric names and missing
-WARN logs because they could not see what data existed. This section extends §1 and §3 and
-supersedes them where they conflict. The five record tools keep their contracts; four tools
-are added, so the registry has nine names. Every tool still returns observations or derived
-counts, never a diagnosis, and agents still never query the live lab.
-
-| Tool | Arguments | Returns |
-| --- | --- | --- |
-| `catalog` | nullable `service` | `summary` of everything available up to the cutoff: services; metric names with unit, aggregations, window sizes, sample count and first/last event; log severity counts, top message templates (numbers/hex IDs collapsed to `<n>`) with counts and attribute keys, operations, versions; change kind, version, config keys and description; latest dependency targets; earlier incident IDs/titles; the valid enum values. |
-| `log_counts` | nullable `service`, `start`, `end`, `severity`, `text_contains`; `group_by` ⊆ service/severity/template/operation/version (default service, severity, template); nullable `attribute` (group by that attribute's value, e.g. `status`); nullable `bucket_seconds` | `summary.groups` of `{key, bucket_start, count, first_event, last_event, exemplar_evidence_id}` (at most 100 groups, highest severity/count kept), plus one exemplar record per group key as citable observations (at most 20, highest severity first). |
-| `metric_stats` | nullable `service`, `start`, `end`, `metric_name`, `window_seconds`, `split_at` | `summary.series` per (service, name, unit, aggregation, window): count, min, max, mean, last, first value/time, last event, and `before_split`/`after_split` statistics around `split_at`; the peak sample per series is attached as a citable observation. |
-| `trace_logs` | `trace_id` and/or `request_id` (one required), nullable `start`, `end`, `limit`, `cursor` | Every log row with that correlation ID across all services, paged like `logs`. |
-
-`ToolPage` gains nullable `summary` for derived results. Derived pages are complete, have no
-cursor, report the number of scanned records as `available_match_count`, and stay within the
-page byte bound by detaching exemplars (their IDs become null) or failing with a structured
-error asking for a narrower query. Aggregates are derived on demand from recorded samples;
-they never rewrite or interpolate stored measurements. A derived page does not establish
-complete-empty coverage. Tool descriptions list the valid service, severity, change-kind and
-aggregation values.
-
-Defaults: `log_counts`, `metric_stats` and `trace_logs`, like `history`, have no lower time
-bound by default, so baselines before the alert window are visible. Every source interval is
-half-open except at the cutoff: a record whose event time equals the cutoff is included, so
-every record available by the cutoff is retrievable through pagination (tested by paging every
-source of `dev-00` and a lab snapshot).
-
-Query dedupe: the runtime normalizes each request with the same `query_key` plus its
-limit/cursor. A request identical to one already answered by a complete page in this run is
-not dispatched and charges no tool call; the task receives the earlier receipt's ID, page
-summary and evidence IDs (with the records when that task had not yet seen them). Failed and
-partial pages are not reused, so retries and further evidence requests stay possible.
+These use frozen or controlled local data without provider calls. `config/local-double.json` retains a historical preflight configuration; it is not loaded as a runtime profile. The executable `demo` and `demo-live` profiles are defined in `contracts.py` and documented in [runtime limits](lld.md#limits-and-closure).

@@ -40,7 +40,7 @@ def result(directory):
     return json.loads((directory / "result.json").read_text())
 
 
-@pytest.mark.parametrize("variant", ["staged", "hub"])
+@pytest.mark.parametrize("variant", ["staged"])
 async def test_public_resume_preserves_siblings_evidence_and_charges_unknown_attempt(
     tmp_path, variant
 ):
@@ -366,7 +366,7 @@ def test_cli_resume_uses_saved_graph_and_source(tmp_path, monkeypatch, capsys):
 
     model = Crash()
     with pytest.raises(NodeCancelledError):
-        asyncio.run(investigate(load_snapshot("dev-00"), model, tmp_path, graph="hub"))
+        asyncio.run(investigate(load_snapshot("dev-00"), model, tmp_path, graph="staged"))
     directory = next(tmp_path.iterdir())
     monkeypatch.setattr("incident_investigator.cli.model", lambda args: model)
     monkeypatch.setattr(
@@ -374,5 +374,5 @@ def test_cli_resume_uses_saved_graph_and_source(tmp_path, monkeypatch, capsys):
     )
     main()
     assert str(directory / "report.md") in capsys.readouterr().out
-    assert result(directory)["graph"] == "hub"
+    assert result(directory)["graph"] == "staged"
     assert result(directory)["status"] == "completed"
