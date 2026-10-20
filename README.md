@@ -130,10 +130,23 @@ Contributors: development checks are in [usage](docs/usage.md#development-checks
 
 ## References
 
+Design
+
+- [Anthropic, Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): parallel specialists, the critic loop and the latency and cost tradeoff
+- [Anthropic, How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): lead plus specialists, and the token and waiting costs of multi-agent systems
+- [incident.io, Building Investigations](https://incident.io/blog/building-investigations-what-it-takes-to-build-an-ai-sre): frozen incidents, adversarial review and evidence-linked claims
+- [Google SRE book, Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/): hypothesize and test, and keep negative results
+- [Alistair Cockburn, Hexagonal Architecture](https://alistair.cockburn.us/hexagonal-architecture/): data sources and storage behind ports and adapters
+
+Evaluation
+
 - [Chen et al., 2021, Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374): the pass@k metric and its unbiased estimator
 - [Yao et al., 2024, tau-bench](https://arxiv.org/abs/2406.12045): the pass^k reliability metric and its estimator
-- [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents): when to use pass@k versus pass^k
-- [Anthropic, Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): parallel specialists, the critic loop and the latency and cost tradeoff
-- [Anthropic, How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): the token and waiting costs of multi-agent systems
+- [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents): pass@k versus pass^k, and grading the output rather than the path
+
+Standards
+
+- [OpenTelemetry logs](https://opentelemetry.io/docs/specs/otel/logs/data-model/) and [metrics](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) data models: the shape of lab evidence records
+- [OpenTelemetry demo feature flags](https://opentelemetry.io/docs/demo/feature-flags/): runtime switches for injecting faults
 
 See [evaluation](docs/evaluation.md#references) and [decisions](docs/decisions.md#references) for the exact claims each one supports.
