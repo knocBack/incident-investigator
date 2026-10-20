@@ -386,8 +386,24 @@ class Jobs:
             )
         elif metadata["status"] == "cancelled":
             cancelled = sum(r["status"] == "interrupted" for r in metadata["runs"])
+            planned = metadata.get("plan", {}).get("attempts")
+            if planned is None:
+                counts = [
+                    len(s["batch"]["faults"])
+                    * len(s["batch"]["models"])
+                    * s["batch"].get("repeats", 1)
+                    * len(s["batch"].get("systems", ["multi"]))
+                    for s in metadata["suites"]
+                    if s["batch"].get("faults") and s["batch"].get("models")
+                ]
+                planned = sum(counts) if counts else None
+            planned_note = (
+                f"; {len(metadata['runs'])} of {planned} planned attempts ran"
+                if planned is not None
+                else ""
+            )
             metadata["outcome"] = (
-                f"Cancelled by user; {len(metadata['runs'])} run reports retained; {cancelled} cancelled in flight. Open the {target} and job log for retained results and spend reconciliation."
+                f"Cancelled by user; {len(metadata['runs'])} run reports retained{planned_note}; {cancelled} cancelled in flight. Open the {target} and job log for retained results and spend reconciliation."
             )
             if metadata.get("termination") == "SIGKILL":
                 metadata["outcome"] += (

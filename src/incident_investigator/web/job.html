@@ -8,7 +8,10 @@
     <div class="actions"><button class="button" id="cancel-job" data-job="{{ job.id }}" {% if not job.can_cancel %}disabled{% endif %} {% if not job.can_cancel and job.status != 'cancelling' %}hidden{% endif %}>{{ 'Cancelling…' if job.status == 'cancelling' else 'Cancel job' }}</button><span id="cancel-status" role="status"></span></div>
     <div id="job-runs">
         {% for suite in job.suites %}<p><a class="button primary" href="/suites/{{ suite.id }}">{{ suite.results_label }}</a></p>{% endfor %}
-        {% for run in job.runs %}<p><a class="button" href="/runs/{{ run.id }}?tab=report">Open report · {{ run.fault }} · {{ run.system }}</a><small>{{ run.outcome }}</small>{% if run.phoenix_url %}<a class="button small" href="{{ run.phoenix_url }}" target="_blank" rel="noreferrer">Phoenix · live detailed view</a>{% endif %}</p>{% endfor %}
+        {% if job.runs %}<details id="job-report-links" {% if job.runs|length <= 10 %}open{% endif %}>
+            <summary>{{ job.runs|length }} retained run reports</summary>
+            {% for run in job.runs %}<p><a class="button" href="/runs/{{ run.id }}?tab=report">Open report · {{ run.fault }} · {{ run.system }} · {{ run.execution_label|default(run.status) }} · {{ run.verdict }}</a><small>{{ run.outcome }}{% if run.status not in ["running", "unfinished"] %} · {{ m.calls(run.model_calls, run.tool_calls) }}{% endif %}</small>{% if run.phoenix_url %}<a class="button small" href="{{ run.phoenix_url }}" target="_blank" rel="noreferrer">Phoenix · live detailed view</a>{% endif %}</p>{% endfor %}
+        </details>{% endif %}
     </div>
     <div class="command">{{ job.command }}</div>
     <div class="terminal" id="job-output" data-job="{{ job.id }}">{{ job.output }}</div>

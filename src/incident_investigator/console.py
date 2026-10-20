@@ -178,12 +178,16 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         rows = presented(repo.runs.runs(filters, request.query_params.get("sort", "created")))
         options = {k: sorted({r[k] for r in repo.runs.runs() if r[k]}) for k in filters}
         options["suite"] = sorted(s["id"] for s in repo.runs.suites())
+        suite_names = {
+            s["id"]: suite_title(s, repo.runs.runs({"suite": s["id"]})) for s in repo.runs.suites()
+        }
         return render(
             request,
             "runs.html",
             runs=rows,
             filters=filters,
             options=options,
+            suite_names=suite_names,
             suites=[
                 {**s, "title": suite_title(s, repo.runs.runs({"suite": s["id"]}))}
                 for s in repo.runs.suites()
@@ -325,7 +329,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             else None
         )
         skipped = board.get("skipped", batch.get("skipped", []))
-        cancelled = launch.get("status") == "cancelled" or any(
+        stopped = launch.get("status") in {"cancelled", "interrupted"} or any(
             "cancelled before admission" in item.get("reason", "") for item in skipped
         )
         return render(
@@ -337,7 +341,8 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             runs=rows,
             stats=summary(rows),
             planned=planned,
-            cancelled=cancelled,
+            stopped=stopped,
+            cancelled=launch.get("status") == "cancelled",
             k=k,
             metrics=metrics,
             paired=paired_metrics(

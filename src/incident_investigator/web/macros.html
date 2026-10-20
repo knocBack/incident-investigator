@@ -23,6 +23,10 @@
             <strong>{{ s.failures }}</strong>
         </div>
         <div class="stat">
+            <label>Cancelled in flight</label>
+            <strong>{{ s.cancelled }}</strong>
+        </div>
+        <div class="stat">
             <label>Total cost (USD)</label>
             <strong>{{ cost(s) }}</strong>
         </div>
@@ -72,7 +76,7 @@
                         </td>
                         <td class="number">
                             {% if r.wall_seconds is not none %}{{ '%.1f'|format(r.wall_seconds) }}s{% else %}unknown{% endif %}
-                            <small>{{ r.calls }} calls · {{ r.events }} events</small>
+                            <small>{{ calls(r.model_calls, r.tool_calls) }} · {{ r.events }} events</small>
                         </td>
                         <td>
                             {% if r.suite %}
@@ -94,6 +98,10 @@
 {%- endmacro %}
 {% macro grounding(v, count, n) -%}
     {% if v is number %}{{ '%.2f'|format(v) }}{% else %}unknown{% endif %} ({{ value(count) }}/{{ n }})
+    {% if v == 0 %}<small>No ranked hypothesis has both valid supporting references and a retrieved observation. Open Grade for citation checks.</small>{% endif %}
+{%- endmacro %}
+{% macro calls(model, tool) -%}
+    {{ '%g'|format(model) if model is number else 'unknown' }} model / {{ '%g'|format(tool) if tool is number else 'unknown' }} tool calls
 {%- endmacro %}
 {% macro inline_measured(v, known=none, digits=2) -%}
     {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}{% if known is number %}at least {{ ('%.' ~ digits ~ 'f')|format(known) }} (some calls unmeasured){% else %}unknown{% endif %}{% endif %}
@@ -102,7 +110,7 @@
     <div class="check-row"><span>Cost</span><span>{{ cost(r) }}</span></div>
     <div class="check-row"><span>Input tokens</span><span>{{ measured(r.input_tokens, r.known_input_tokens, 0) }}</span></div>
     <div class="check-row"><span>Output tokens</span><span>{{ measured(r.output_tokens, r.known_output_tokens, 0) }}</span></div>
-    <div class="check-row"><span>Model / tool calls</span><span>{{ value(r.model_calls) }} / {{ value(r.tool_calls) }}</span></div>
+    <div class="check-row"><span>Model / tool calls</span><span>{{ calls(r.model_calls, r.tool_calls) }}</span></div>
     <div class="check-row"><span>Wall seconds</span><span>{{ measured(r.wall_seconds) }}</span></div>
 {% endmacro %}
 {% macro result_card(row) %}
@@ -111,6 +119,7 @@
         <p>pass@1 {{ '%.3f'|format(row.pass1) }} · pass@k {{ '%.3f'|format(row.passk) }} · pass^k {{ '%.3f'|format(row.powerk) }} (k={{ row.k }})</p>
         <div class="check-row"><span>Grounding</span><span>{{ grounding(row.grounding, row.grounding_measured, row.n) }}</span></div>
         <div class="check-row"><span>Execution failures</span><span>{{ row.execution_failures }}</span></div>
+        <div class="check-row"><span>Cancelled in flight</span><span>{{ row.cancelled }}</span></div>
         <div class="check-row"><span>Model-call errors</span><span>{{ value(row.model_call_errors) }}</span></div>
         {% if row.free_no_charge %}<p>free model, no charge · token usage may remain unknown</p>{% endif %}
         {{ resources(dict(row.resources, free_no_charge=row.free_no_charge, scripted_no_charge=row.scripted_no_charge)) }}

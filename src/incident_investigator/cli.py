@@ -271,7 +271,7 @@ def main() -> None:
         try:
             asyncio.run(_graceful_evaluation(args))
         except asyncio.CancelledError:
-            print("Cancelled; results and spend records finalized", flush=True)
+            print("Cancelled; retained results finalized", flush=True)
             raise SystemExit(143) from None
         return
     if args.command == "inspect":
