@@ -255,18 +255,23 @@ def present_run(run, store, suite_prefix=None):
 
 
 def measured_differences(multi, single):
+    if multi.get("scripted_no_charge") and single.get("scripted_no_charge"):
+        return ""  # Scripted replays are fixed; their resource gaps say nothing about the systems.
     differences = []
-    for field, unit, comparative in (
-        ("wall_seconds", "wall time", "less"),
-        ("input_tokens", "input tokens", "fewer"),
-        ("model_calls", "model calls", "fewer"),
-        ("tool_calls", "tool calls", "fewer"),
+    for field, unit, comparative, digits in (
+        ("wall_seconds", "wall time", "less", 2),
+        ("input_tokens", "input tokens", "fewer", 0),
+        ("model_calls", "model calls", "fewer", 0),
+        ("tool_calls", "tool calls", "fewer", 0),
     ):
         values = []
         for row in (multi, single):
             value = row.get("resources", {}).get(field)
+            # Use the totals as the cards print them, so the sentence matches what is on screen.
             values.append(
-                value / row["n"] if isinstance(value, int | float) and row.get("n") else None
+                round(value, digits) / row["n"]
+                if isinstance(value, int | float) and row.get("n")
+                else None
             )
         a, b = values
         if a is not None and b is not None and a != b and max(a, b) > 0:
@@ -275,6 +280,8 @@ def measured_differences(multi, single):
                 f"{system} used {(1 - min(a, b) / max(a, b)) * 100:.0f}% {comparative} {unit}"
             )
     a, b = multi.get("grounding"), single.get("grounding")
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        a, b = round(a, 2), round(b, 2)
     if isinstance(a, int | float) and isinstance(b, int | float) and a != b:
         system = "Multi" if a > b else "Single"
         differences.append(
