@@ -137,7 +137,7 @@ cli.main()
         child.terminate()
         output, _ = child.communicate(timeout=10)
         assert child.returncode == 143
-        assert output.strip() == "Cancelled; results and spend records finalized"
+        assert output.strip() == "Cancelled; retained results finalized"
         assert (tmp_path / "out/finalized.txt").read_text() == "retained"
     finally:
         if child.poll() is None:

@@ -140,7 +140,7 @@ if (form && form.dataset.enabled === "yes") {
           pending = false;
           preview.textContent = result.command;
           document.getElementById("job-limit").textContent =
-            `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at concurrency ${result.plan.concurrency}; then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
+            `Job limit: ${result.plan.timeout_seconds} seconds for ${result.plan.attempts} attempts at effective concurrency ${result.plan.concurrency} (requested ${request.concurrency}; limited by available attempts); then up to ${result.plan.termination_grace_seconds} seconds for graceful finalization.`;
           document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
             ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
             : result.reservation_guide;
@@ -260,6 +260,7 @@ if (output) {
     }
     if (!["running", "cancelling"].includes(job.status)) stream.close();
     const runs = document.getElementById("job-runs");
+    const reportsOpen = document.getElementById("job-report-links")?.open;
     runs.replaceChildren();
     for (const suite of job.suites || []) {
       const p = document.createElement("p"), a = document.createElement("a");
@@ -268,6 +269,11 @@ if (output) {
       a.className = "button primary";
       p.append(a); runs.append(p);
     }
+    const reports = document.createElement("details"), reportCount = document.createElement("summary");
+    reports.open = reportsOpen ?? (job.runs || []).length <= 10;
+    reports.id = "job-report-links";
+    reportCount.textContent = `${(job.runs || []).length} retained run reports`;
+    reports.append(reportCount);
     for (const run of job.runs || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/runs/" + encodeURIComponent(run.id) + "?tab=report";
@@ -275,6 +281,7 @@ if (output) {
       p.append(a);
       const progress = document.createElement("small");
       progress.textContent = run.outcome || run.progress || "Progress unavailable";
+      if (!["running", "unfinished"].includes(run.status)) progress.textContent += ` · ${run.model_calls ?? "unknown"} model / ${run.tool_calls ?? "unknown"} tool calls`;
       p.append(progress);
       if (run.phoenix_url) {
         const trace = document.createElement("a");
@@ -282,8 +289,9 @@ if (output) {
         trace.textContent = "Phoenix · live detailed view"; trace.className = "button small";
         p.append(" ", trace);
       }
-      runs.append(p);
+      reports.append(p);
     }
+    if ((job.runs || []).length) runs.append(reports);
     if (!(job.runs || []).length) {
       const p = document.createElement("p");
       p.textContent = job.status === "running" ? "Waiting for the first admitted run. Progress and links appear here automatically." : "Open the comparison above for skipped attempts and reasons. Grading jobs update the existing run.";

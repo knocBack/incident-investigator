@@ -173,7 +173,9 @@ def present_run(run, store, suite_prefix=None):
     ]
     hypotheses = result.get("hypotheses", [])
     hypothesis_note = (
-        "retained a high-confidence hypothesis"
+        "tentative cause found but not committed; see Grade"
+        if hypotheses and result.get("diagnosis") == "inconclusive"
+        else "retained a high-confidence hypothesis"
         if any(h.get("confidence") == "high" for h in hypotheses)
         else "retained a ranked hypothesis"
         if hypotheses
@@ -257,6 +259,7 @@ def present_run(run, store, suite_prefix=None):
         else None,
         "provider_issue": provider_issue,
         "execution_label": "cancelled in flight" if cancelled else run["status"],
+        "cancelled": cancelled,
         "incomplete_reason": "cancelled in flight"
         if cancelled
         else failure_label(
@@ -320,6 +323,12 @@ def comparison_outcome(metrics):
         missing = []
         for system, row in (("multi", multi), ("single", single)):
             if row:
+                incomplete = [r for r in row["runs"] if r.get("incomplete_reason")]
+                if incomplete:
+                    reasons = "; ".join(dict.fromkeys(r["incomplete_reason"] for r in incomplete))
+                    missing.append(
+                        f"{system.title()}: {len(incomplete)} of {len(row['runs'])} attempts did not finish ({reasons})."
+                    )
                 continue
             reasons = list(
                 dict.fromkeys(
@@ -415,11 +424,34 @@ def suite_title(suite, runs):
 
 
 def markdown(text, run_id="", references=()):
+    text = re.sub(
+        r"(### (Supporting|Contradicting) evidence \(0\)\n\n)None recorded\.",
+        lambda match: (
+            match[1]
+            + f"No {match[2].lower()} references were attached to this ranked hypothesis. "
+            + "Facts and Summary may cite observations separately; those citations do not count as hypothesis support in Grade."
+        ),
+        text,
+    )
     renderer = MarkdownIt("commonmark", {"html": False}).enable("table").disable("image")
     rendered = renderer.render(text)
     from urllib.parse import quote
 
     for ident in references:
+        record = references[ident]
+        if isinstance(record, dict) and "data" in record:
+            # Expand only exported citation lines, never model-authored prose or JSON.
+            prefix = (
+                f"<li><code>{html.escape(ident)}</code> — {html.escape(record.get('source', ''))}: "
+            )
+            rendered = re.sub(
+                re.escape(prefix) + r"[^\n]*</li>",
+                lambda match, ident=ident, record=record: (
+                    f"<li><code>{html.escape(ident)}</code> — {html.escape(record.get('source', ''))}"
+                    + f"<details><summary>Observation JSON</summary><pre>{html.escape(pretty(record['data']))}</pre></details></li>"
+                ),
+                rendered,
+            )
         rendered = rendered.replace(
             f"<code>{html.escape(ident)}</code>",
             f'<a class="ref" href="/runs/{quote(run_id, safe="")}/evidence/{quote(ident, safe="")}">{html.escape(ident)}</a>',
@@ -454,7 +486,11 @@ def observations(rows, params):
 
 
 def _failures(runs):
-    return sum(r.get("status") in {"failed", "resource_exhausted", "interrupted"} for r in runs)
+    return sum(
+        r.get("status") in {"failed", "resource_exhausted", "interrupted"}
+        and not r.get("cancelled", False)
+        for r in runs
+    )
 
 
 def suite_metrics(runs, k):
@@ -514,6 +550,7 @@ def suite_metrics(runs, k):
                 "grounding": sum(grounded) / len(grounded) if grounded else None,
                 "grounding_measured": len(grounded),
                 "execution_failures": _failures(items),
+                "cancelled": sum(bool(r.get("cancelled")) for r in items),
                 "model_call_errors": total(items, "model_call_errors"),
                 "pass1": correct / n,
                 "passk": at,
@@ -590,6 +627,10 @@ def system_metrics(board, runs, k):
                 "suite_kind": suite_kind,
                 "models": row.get("models", {}),
                 "outcomes": outcomes,
+                "execution_failures": _failures(outcomes)
+                if outcomes
+                else row.get("execution_failures"),
+                "cancelled": sum(bool(r.get("cancelled")) for r in outcomes),
                 "model_call_errors": total(outcomes, "model_call_errors"),
                 "passk": sum(p[0] for p in passes) / len(passes) if passes else None,
                 "powerk": sum(p[1] for p in passes) / len(passes) if passes else None,
@@ -605,6 +646,7 @@ def summary(runs):
         "runs": len(runs),
         "correct": sum(r["verdict"] == "correct" for r in runs),
         "failures": _failures(runs),
+        "cancelled": sum(bool(r.get("cancelled")) for r in runs),
         "cost": total(runs, "cost"),
         "known_cost": total(runs, "known_cost"),
         "calls": sum(r["calls"] for r in runs),

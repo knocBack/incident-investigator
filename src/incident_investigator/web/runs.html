@@ -18,7 +18,7 @@
                 <option value="">All</option>
                 {% for option in opts %}
                     <option value="{{ option }}"
-                            {% if filters[key] == option %}selected{% endif %}>{{ option }}</option>
+                            {% if filters[key] == option %}selected{% endif %}>{{ suite_names.get(option, option) if key == 'suite' else option }}</option>
                 {% endfor %}
                 </select>
             </label>

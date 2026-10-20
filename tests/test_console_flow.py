@@ -464,7 +464,7 @@ def test_paired_suite_explains_progress_timeout_cost_and_grade_conflicts(repo, t
         assert "did not finish" in page
         assert "not a like-for-like comparison of completed attempts" in page
         assert (
-            "stopped during reporting; provider HTTP 502; retained a high-confidence hypothesis"
+            "stopped during reporting; provider HTTP 502; tentative cause found but not committed; see Grade"
             in page
         )
         assert "2 timed-out model calls at 180 s per call" in page
@@ -567,7 +567,7 @@ def test_phoenix_default_and_authorization_guidance(repo, tmp_path, monkeypatch,
         assert bool(re.search(r'name="trace" type="checkbox"\s+checked', page)) == available
         assert "demo-live gives live providers more time" in page
         assert "0 means no paid calls allowed" in page
-        assert "Blank inherits the suite cap" in page
+        assert "Blank inherits the Suite cap" in page
         token = headers(client)
         body = {"provider": "openrouter", "model_id": "test/free", "faults": ["case-02"]}
         preview = client.post("/api/preview", json=body, headers=token).json()

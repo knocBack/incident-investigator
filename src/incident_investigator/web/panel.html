@@ -70,7 +70,7 @@
                             System<select name="system">
                                 <option value="multi">multi</option>
                                 <option value="single">single</option>
-                                <option value="both">both (eval-suite)</option>
+                                <option value="both">multi / single (both, eval-suite)</option>
                             </select>
                             <small>Multi: six collaborating roles. Single: one investigator. Both: compare them on the same snapshots and limits.</small>
                         </label>
@@ -95,11 +95,11 @@
        max="100"
        step=".01"
        value="0">
-                            <small>Total allowance shared by all attempts in this suite. 0 means no paid calls allowed.</small>
+                            <small>Suite cap shared by all attempts. 0 means no paid calls allowed.</small>
                         </label>
                         <label class="field">
                             Per-run cap USD<input name="run_budget_usd" id="run_budget_usd" aria-describedby="reservation-estimate run-error" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
-                            <small>Maximum for each attempt within the suite allowance. Blank inherits the suite cap; 0 allows no paid calls.</small>
+                            <small>Maximum for each attempt within the Suite cap. Blank inherits the Suite cap; 0 allows no paid calls.</small>
                         </label>
                         <label class="field">
                             Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="{{ profiles['demo'].call_seconds }} seconds (demo)">
@@ -117,10 +117,10 @@
                     <label class="fault-option">
                         <input name="trace" type="checkbox" {% if phoenix_available %}checked{% endif %}>Capture in local Phoenix (optional extra required)
                     </label>
-                    <p class="caption">{% if phoenix_available %}Local Phoenix is reachable; capture is enabled by default.{% else %}Capture needs a reachable local Phoenix and the phoenix extra installed.{% endif %}</p>
+                    <p class="caption">{% if phoenix_available %}Local Phoenix is reachable; capture is enabled by default, including scripted runs so you can inspect replay steps. Scripted traces use fixed responses and make no provider calls. Uncheck to skip capture.{% else %}Capture needs a reachable local Phoenix and the phoenix extra installed. Scripted capture records replay steps with fixed responses and no provider calls.{% endif %}</p>
                     <label class="confirm">
                         <input name="confirm_paid" id="confirm_paid" data-label="I explicitly authorize OpenRouter calls" type="checkbox">
-                        <span>I explicitly authorize OpenRouter calls under this budget cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
+                        <span>I explicitly authorize OpenRouter calls under this Suite cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
                     </label>
                 </div>
             </div>
