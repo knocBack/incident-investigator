@@ -48,6 +48,28 @@ def _pass_metrics(n, correct, k):
     return 1 - math.comb(n - correct, k) / denominator, math.comb(correct, k) / denominator
 
 
+def reliability_metrics(items):
+    recovery = [
+        g["reliability"] for g in items if (g.get("reliability") or {}).get("kind") == "recovery"
+    ]
+    uncertainty = [
+        g["reliability"] for g in items if (g.get("reliability") or {}).get("kind") == "uncertainty"
+    ]
+    return {
+        "recovery": {
+            "runs": len(recovery),
+            "fault_exercised": sum(r["fault_exercised"] for r in recovery),
+            "recovered": sum(r["recovered"] for r in recovery),
+            "not_exercised": sum(not r["fault_exercised"] for r in recovery),
+            "success": sum(r["success"] for r in recovery),
+        },
+        "uncertainty": {
+            "runs": len(uncertainty),
+            "justified": sum(r["justified_uncertainty"] for r in uncertainty),
+        },
+    }
+
+
 def _fault_metrics(items, k):
     def fault_of(g):
         # Standalone `eval` grades have a family but no suite job metadata.
@@ -62,6 +84,7 @@ def _fault_metrics(items, k):
         metrics[fault] = {
             "n": n,
             "correct": correct,
+            "reliability": reliability_metrics(group),
             "pass_at_1": correct / n,
             "grounding": (
                 measured_sum(g["grounding"]["hypothesis_claim_fraction"] for g in group) / n
@@ -120,6 +143,7 @@ def leaderboard(grades, out, skipped=(), k=4):
                 "suite_kind": suite_kind,
                 "runs": len(items),
                 "accuracy": sum(g["verdict"] == "correct" for g in items) / len(items),
+                "reliability": reliability_metrics(items),
                 "verdicts": {
                     v: sum(g["verdict"] == v for g in items)
                     for v in ("correct", "partial", "wrong", "inconclusive", "no_report")
@@ -171,9 +195,9 @@ def leaderboard(grades, out, skipped=(), k=4):
     lines = [
         "# Exploratory evaluation",
         "",
-        "No acceptance threshold. Primary diagnosis and reliability success are separate. Missing measurements remain unknown. Grounding measures provenance; semantic review remains required.",
+        "No acceptance threshold. Diagnostic verdicts are separate from demonstrated recovery and justified uncertainty. Missing measurements remain unknown. Grounding measures provenance; semantic review remains required.",
         "",
-        "| System | Graph | Set | Model(s) | Runs | Accuracy / success | Grounding | Mean model/tool calls | Mean tokens in/out | Mean USD | Mean wall s |",
+        "| System | Graph | Set | Model(s) | Runs | Diagnostic verdict rate | Grounding | Mean model/tool calls | Mean tokens in/out | Mean USD | Mean wall s |",
         "| --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: |",
     ]
     for r in rows:
@@ -199,6 +223,27 @@ def leaderboard(grades, out, skipped=(), k=4):
             lines.append(
                 f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {usage_display(resource['input_tokens'], resource['known_input_tokens'])}/{usage_display(resource['output_tokens'], resource['known_output_tokens'])} | {usage_display(resource['cost'], resource['known_cost'])} | {display(metric['wall_seconds'])} |"
             )
+    lines.extend(
+        [
+            "",
+            "## Reliability outcomes",
+            "",
+            "Recovery requires an exercised failed retrieval and a bounded successful successor. A correct diagnosis without exercise is not demonstrated recovery.",
+            "",
+            "| System | Incident | R1 exercised / recovered / not exercised | R1 recovery plus diagnosis | R2 justified uncertainty |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in rows:
+        for incident, metric in row["faults"].items():
+            recovery, uncertainty = (
+                metric["reliability"]["recovery"],
+                metric["reliability"]["uncertainty"],
+            )
+            if recovery["runs"] or uncertainty["runs"]:
+                lines.append(
+                    f"| {row['system']} | {incident} | {recovery['fault_exercised']} / {recovery['recovered']} / {recovery['not_exercised']} | {recovery['success']} / {recovery['runs']} | {uncertainty['justified']} / {uncertainty['runs']} |"
+                )
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
         lines.extend(
@@ -241,6 +286,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     concurrency = getattr(args, "concurrency", None) or 1
     if not faults or set(faults) - set(FAMILIES + CASES) or repeats < 1 or concurrency < 1:
         raise ValueError("known faults and repeats >= 1 required")
+    limits = cli.profile(args)
     amount(args.budget_usd)
     run_budget = getattr(args, "run_budget_usd", None) or args.budget_usd
     amount(run_budget)
@@ -253,9 +299,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
         "version": "suite.v2",
         "systems": systems,
         "suite_set": selection or "legacy",
-        "limits": PROFILES["demo-live" if args.model == "openrouter" else "demo"].model_dump(
-            mode="json"
-        ),
+        "limits": limits.model_dump(mode="json"),
         "graph": getattr(args, "graph", DEFAULT_GRAPH),
         "exposure": "development lab; exploratory",
         "faults": faults,
@@ -374,7 +418,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     if model_factory:
                         adapter = model_factory(model_id)
                     else:
-                        adapter = OpenRouterModel()
+                        adapter = OpenRouterModel(timeout_seconds=limits.call_seconds)
                         adapter._models = dict.fromkeys(adapter._models, model_id)
                         adapter = BoundedModel(
                             adapter, catalog, run_guard, max_input_tokens=max_input_tokens
@@ -395,6 +439,8 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                 system=system,
                                 _snapshot=snapshots.get(fault),
                                 _run_id=run_id,
+                                call_seconds=limits.call_seconds,
+                                wall_seconds=limits.wall_seconds,
                             )
                         )
                     except (Exception, asyncio.CancelledError) as exc:
@@ -429,6 +475,8 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                         if (directory / "result.json").exists()
                         else False
                     )
+                    if (g.get("reliability") or {}).get("kind") == "recovery":
+                        g["fault_exercised"] = g["reliability"]["fault_exercised"]
                     g["resources"]["wall_seconds"] = time.monotonic() - started
                     g["suite_attempt"] = {
                         "model": model_id,
@@ -489,6 +537,8 @@ def add_commands(sub):
     command.add_argument("--out", type=Path, default=batch_output("eval"))
     command = sub.add_parser("eval-suite")
     add_graph_argument(command, allow_both=True)
+    command.add_argument("--call-seconds", type=float)
+    command.add_argument("--wall-seconds", type=float)
     command.add_argument("--set", choices=["primary", "variants", "all"], default="primary")
     command.add_argument("--faults", default="all")
     command.add_argument("--model", choices=["openrouter", "scripted"], default="openrouter")

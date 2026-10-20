@@ -208,6 +208,29 @@ async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
     g = grade(result, expectation(case))
     assert g["verdict"] == "correct", g["diagnosis_checks"]
     assert g["citations"]["unknown"] == []
+    if case == "case-04":
+        supplemented = deepcopy(result)
+        receipt_ids = list(result["state"]["tool_receipts"])[:2]
+        supplemented["hypotheses"][0]["supporting_evidence"].extend(receipt_ids)
+        graded = grade(supplemented, expectation(case))
+        assert graded["verdict"] == "correct"
+        assert graded["grounding"]["hypothesis_claim_fraction"] == 1
+        for invalid_kind in ("invented", "foreign", "late"):
+            invalid = deepcopy(supplemented)
+            invalid["hypotheses"][0]["supporting_evidence"].append("bad-reference")
+            if invalid_kind != "invented":
+                row = deepcopy(next(iter(invalid["state"]["evidence"].values())))
+                if invalid_kind == "foreign":
+                    row["dataset_digest"] = "foreign-dataset"
+                else:
+                    row["available_at"] = "2027-01-01T00:00:00Z"
+                invalid["state"]["evidence"]["bad-reference"] = row
+            checked = grade(invalid, expectation(case))
+            assert checked["verdict"] != "correct"
+            assert not checked["diagnosis_checks"]["support_references_valid"]
+        supplemented["hypotheses"][0]["supporting_evidence"] = receipt_ids
+        assert grade(supplemented, expectation(case))["verdict"] != "correct"
+        assert grade(supplemented, expectation(case))["grounding"]["hypothesis_claim_fraction"] == 0
     if system == "single":
         assert {t["role"] for t in result["state"]["tasks"].values()} == {"single"}
         assert set(result["usage"]) == {"single"}
@@ -216,6 +239,29 @@ async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
         assert "changes" in context["tools"] and "logs" in context["tools"]
         assert "NO native or callable tools" in model.requests[0][0][0]["content"]
     if case == "reliability-01":
+        assert g["reliability"]["fault_exercised"] and g["reliability"]["recovered"]
+        assert g["reliability"]["success"]
+        bypass = deepcopy(result)
+        bypass["state"]["calls"] = {}
+        bypass_grade = grade(bypass, expectation(case))
+        assert bypass_grade["verdict"] == "correct"
+        assert bypass_grade["reliability"]["status"] == "not_exercised"
+        assert not bypass_grade["reliability"]["success"]
+        from incident_investigator.grading.suite import reliability_metrics
+
+        recovery_metrics = reliability_metrics([g, bypass_grade])["recovery"]
+        assert recovery_metrics["runs"] == 2 and recovery_metrics["not_exercised"] == 1
+        assert recovery_metrics["success"] == recovery_metrics["recovered"] == 1
+        failed = deepcopy(result)
+        successors = [c for c in failed["state"]["calls"].values() if c.get("retry_of")]
+        for successor in successors:
+            failed["receipts"].pop(successor["call_id"], None)
+        assert not grade(failed, expectation(case))["reliability"]["recovered"]
+        unbounded = deepcopy(result)
+        for call in unbounded["state"]["calls"].values():
+            if call.get("retry_of"):
+                call["retry"] = 10
+        assert not grade(unbounded, expectation(case))["reliability"]["bounded_successor"]
         calls = [
             c
             for c in result["state"]["calls"].values()
@@ -229,6 +275,7 @@ async def test_scripted_cases_both_systems_and_grading(tmp_path, case, system):
     broken["hypotheses"][0]["statement"] = "Database capacity shortage"
     assert grade(broken, expectation(case))["verdict"] != "correct"
     if case == "reliability-02":
+        assert g["reliability"]["justified_uncertainty"]
         broken = deepcopy(result)
         broken["report"]["summary"] += " Hostname inventroy is misspelled."
         assert grade(broken, expectation(case))["verdict"] == "wrong"
@@ -530,3 +577,68 @@ async def test_cancelled_budget_settlement_is_retryable_and_idempotent(operation
     await run.release(ident)
     assert not parent.active and not run.active and not run.parent_ids
     assert len(parent.records) == len(run.records) == 1
+
+
+async def test_suite_timeout_propagates_to_runtime_adapter_and_manifest(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    import httpx
+
+    from incident_investigator.grading import suite
+    from incident_investigator.models import OpenRouterModel
+    from incident_investigator.models.adapter import ModelUsage
+
+    model_id = "deepseek/deepseek-v3.2"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-test-key")
+
+    async def usage(client):
+        return 0
+
+    async def catalogue(client, url):
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "data": [
+                    {
+                        "id": model_id,
+                        "context_length": 180000,
+                        "pricing": {"prompt": "0", "completion": "0"},
+                    }
+                ]
+            },
+        )
+
+    async def complete(self, messages, schema):
+        assert self.timeout_seconds == 180
+        if not hasattr(self, "_test_script"):
+            self._test_script = CaseScript("case-02")
+        result = await self._test_script.complete(messages, schema)
+        return replace(result, usage=ModelUsage(1, 1, 0), model=model_id)
+
+    monkeypatch.setattr(suite, "key_usage", usage)
+    monkeypatch.setattr(httpx.AsyncClient, "get", catalogue)
+    monkeypatch.setattr(OpenRouterModel, "complete", complete)
+    args = Namespace(
+        faults="case-02",
+        set="primary",
+        system="both",
+        graph="staged",
+        models=model_id,
+        model="openrouter",
+        repeats=1,
+        concurrency=2,
+        budget_usd="0",
+        out=tmp_path / "batch",
+        max_input_tokens=180000,
+        call_seconds=180,
+        wall_seconds=1800,
+        k=1,
+    )
+    board = await run_suite(args)
+    assert [g["verdict"] for g in board["runs"]] == ["correct", "correct"]
+    batch = json.loads((args.out / "batch.json").read_text())
+    assert batch["limits"]["call_seconds"] == 180 and batch["limits"]["wall_seconds"] == 1800
+    assert batch["max_input_tokens"] == 180000
+    for path in args.out.glob("*/result.json"):
+        assert json.loads(path.read_text())["state"]["limits"]["call_seconds"] == 180

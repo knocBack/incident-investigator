@@ -26,8 +26,16 @@ from incident_investigator.workspace import home
 
 def profile(args) -> Limits:
     """Live providers get the demo-live profile; its per-call timeout also bounds adapters."""
-    selected = getattr(args, "limits_profile", None)
-    return PROFILES[selected or ("demo-live" if args.model in {"openrouter", "codex"} else "demo")]
+    base = PROFILES[
+        getattr(args, "limits_profile", None)
+        or ("demo-live" if args.model in {"openrouter", "codex"} else "demo")
+    ]
+    overrides = {
+        name: getattr(args, option)
+        for name, option in (("call_seconds", "call_seconds"), ("wall_seconds", "wall_seconds"))
+        if getattr(args, option, None) is not None
+    }
+    return Limits.model_validate({**base.model_dump(), **overrides})
 
 
 def model(args):
@@ -175,6 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("investigate", "demo"):
         command = sub.add_parser(name)
         add_graph_argument(command)
+        command.add_argument("--call-seconds", type=float)
+        command.add_argument("--wall-seconds", type=float)
         command.add_argument(
             "--model", choices=["scripted", "codex", "openrouter"], default="scripted"
         )

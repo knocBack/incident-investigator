@@ -61,5 +61,6 @@
     "database contention"
   ],
   "precision": "Development case; lexical and provenance checks require human semantic review.",
-  "reliability": true
+  "reliability": true,
+  "reliability_rule": "source-01"
 }

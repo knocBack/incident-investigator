@@ -20,7 +20,7 @@ class Limits(Record):
     max_model_calls: int = Field(default=40, ge=1, le=200)
     max_tool_calls: int = Field(default=60, ge=1, le=300)
     wall_seconds: float = Field(default=240, gt=0, le=3600, allow_inf_nan=False)
-    call_seconds: float = Field(default=30, gt=0, le=120, allow_inf_nan=False)
+    call_seconds: float = Field(default=30, gt=0, le=600, allow_inf_nan=False)
     task_model_calls: int = Field(default=10, ge=1, le=40)
     task_tool_calls: int = Field(default=15, ge=1, le=60)
     call_retries: int = Field(default=1, ge=0, le=2)
