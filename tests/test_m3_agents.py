@@ -653,6 +653,9 @@ async def test_report_evidence_counts_and_empty_sections(tmp_path):
 def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, expected_status):
     from incident_investigator import cli
 
+    script = tmp_path / "empty-script.json"
+    script.write_text("[]", encoding="utf-8")
+
     async def bounded_investigate(snapshot, model, out, **kwargs):
         kwargs.pop("limits")
         limits = Limits(max_model_calls=1) if expected_status == "resource_exhausted" else Limits()
@@ -668,6 +671,8 @@ def test_cli_nonzero_status_preserves_artifacts(tmp_path, monkeypatch, capsys, e
             "dev-00",
             "--model",
             "scripted",
+            "--script",
+            str(script),
             "--out",
             str(tmp_path),
         ],
@@ -689,7 +694,16 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
 
     monkeypatch.setattr(
         "sys.argv",
-        ["incident-investigator", "investigate", "--case", "missing", "--out", str(tmp_path)],
+        [
+            "incident-investigator",
+            "investigate",
+            "--case",
+            "missing",
+            "--out",
+            str(tmp_path),
+            "--script",
+            "tests/scripted-demo.json",
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()
@@ -698,6 +712,29 @@ def test_unknown_case_prints_concise_error_without_creating_run(tmp_path, monkey
     assert "unknown case ID: missing" in error
     assert "Traceback" not in error
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("before_send", [True, False])
+async def test_pre_send_refusal_exports_zero_usage_without_hiding_unknown_cost(
+    tmp_path, before_send
+):
+    from incident_investigator.models import ModelCallError
+
+    class Refused:
+        async def complete(self, messages, schema):
+            raise ModelCallError(
+                "synthetic refusal", retryable=False, before_response=True, before_send=before_send
+            )
+
+    directory = await investigate(load_snapshot("dev-00"), Refused(), tmp_path)
+    result = read_result(directory)
+    receipt = next(iter(result["receipts"].values()))
+    if before_send:
+        assert receipt["usage"] == {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        assert result["usage"]["orchestrator"]["cost"] == 0
+    else:
+        assert receipt["usage"] is None
+        assert result["usage"]["orchestrator"]["cost"] == "unknown"
 
 
 @pytest.mark.parametrize("decision_index", [0, 1])

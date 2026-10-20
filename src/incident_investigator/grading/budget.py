@@ -42,7 +42,9 @@ class SpendGuard:
         bound = amount(bound)
         async with self.lock:
             if not self.launch_allowed(bound):
-                raise ModelCallError("suite budget reservation refused call", retryable=False)
+                raise ModelCallError(
+                    "suite budget reservation refused call", retryable=False, before_send=True
+                )
             ident = str(uuid4())
             self.active[ident] = bound
             return ident
@@ -173,7 +175,9 @@ class BoundedModel:
         # tokenizer. Allow framing overhead per message; include both schema modes.
         prompt_tokens = prompt_bytes + 32 * len(preview["messages"]) + 256
         if prompt_tokens > self.max_input_tokens:
-            raise ModelCallError("suite input token limit refused call", retryable=False)
+            raise ModelCallError(
+                "suite input token limit refused call", retryable=False, before_send=True
+            )
         output_tokens = int(preview.get("max_tokens", 4096))
         ident = await self.guard.reserve(
             price_bound(

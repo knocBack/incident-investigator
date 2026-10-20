@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+    <span class="eyebrow">Real CLI commands</span>
+    <h1>Run a selective evaluation</h1>
+    <p class="subtitle">Discover faults, review the exact command, and stream its output into retained artifacts.</p>
+    {% if not enabled %}
+        <div class="callout warning">Process launching is unavailable for this backend. Viewing and human reviews still work.</div>
+    {% endif %}
+    <form id="run-form" data-enabled="{{ 'yes' if enabled else 'no' }}">
+        <div class="grid2">
+            <div>
+                <div class="card">
+                    <p class="step-label">01 / Select work</p>
+                    <label class="field">
+                        Command<select name="command">
+                        <option value="eval-suite">eval-suite · investigate and grade</option>
+                        <option value="demo">demo · one lab injection</option>
+                        <option value="eval"
+                                {% if request.query_params.get('grade') %}selected{% endif %}>eval · grade a saved run</option>
+                        </select>
+                    </label>
+                    <div class="fault-grid">
+                        {% for fault in faults %}
+                            <label class="fault-option">
+                                <input type="checkbox"
+                                       name="faults"
+                                       value="{{ fault.id }}"
+                                       {% if not fault.injectable or not fault.evaluable %}disabled{% endif %}
+                                       {% if loop.first and not request.query_params.get('grade') %}checked{% endif %}>
+                                <span>{{ fault.id }}<small>{{ fault.version }} · {{ 'injectable' if fault.injectable else 'evaluation only' }}</small>
+                                </span>
+                            </label>
+                        {% endfor %}
+                    </div>
+                    <label class="field">
+                        Saved run (eval only)<select name="run">
+                        <option value="">Select</option>
+                        {% for run in runs %}
+                            <option value="{{ run.id }}"
+                                    {% if request.query_params.get('grade') == run.id %}selected{% endif %}>{{ run.fault }} · {{ run.run_id[:8] }}</option>
+                        {% endfor %}
+                        </select>
+                    </label>
+                    <p class="caption">No fault selected for eval uses the run’s expectation pointer. Select one fault to explicitly override it.</p>
+                </div>
+                <div class="card">
+                    <p class="step-label">02 / Bound the run</p>
+                    <div class="fields">
+                        <label class="field">
+                            Provider<select name="provider">
+                            <option>scripted</option>
+                            <option>openrouter</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            OpenRouter model id<input name="model_id" placeholder="organization/model">
+                        </label>
+                        <label class="field">
+                            Graph<select name="graph">
+                            {% for graph in graphs %}
+                                <option>{{ graph }}</option>
+                            {% endfor %}
+                            </select>
+                        </label>
+                        <label class="field">
+                            Limits profile<select name="limits_profile">
+                            {% for profile in profiles %}
+                                <option>{{ profile }}</option>
+                            {% endfor %}
+                            </select>
+                        </label>
+                        <label class="field">
+                            Repeats<input name="repeats" type="number" min="1" max="20" value="1">
+                        </label>
+                        <label class="field">
+                            Concurrency<input name="concurrency" type="number" min="1" max="8" value="2">
+                        </label>
+                        <label class="field">
+                            Budget cap USD<input name="budget_usd"
+       type="number"
+       min="0"
+       max="100"
+       step=".01"
+       value="0">
+                        </label>
+                    </div>
+                    <label class="fault-option">
+                        <input name="trace" type="checkbox">Capture in local Phoenix (optional extra required)
+                    </label>
+                    <label class="confirm">
+                        <input name="confirm_paid" type="checkbox">
+                        <span>I explicitly authorize OpenRouter calls under this budget cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
+                    </label>
+                    <p class="caption">Scripted is a deterministic coordination replay, not a diagnostic fallback. Without an installed replay file, an empty script fails boundedly and retains artifacts.</p>
+                </div>
+            </div>
+            <div>
+                <div class="card">
+                    <p class="step-label">03 / Review & launch</p>
+                    <div class="command" id="command-preview">Choose settings to preview the command.</div>
+                    <p class="error-text" id="run-error" role="status"></p>
+                    <div class="actions">
+                        <button class="button" type="button" id="preview-command">Update command</button>
+                        <button class="button primary" {% if not enabled %}disabled{% endif %}>Launch</button>
+                    </div>
+                    <p class="caption">One active console job at a time. Selected concurrency applies to its batch. Jobs retain logs and have a one-hour console timeout; individual runs retain finite runtime limits.</p>
+                </div>
+            </div>
+        </div>
+    </form>
+{% endblock %}

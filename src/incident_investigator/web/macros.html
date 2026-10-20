@@ -1,0 +1,86 @@
+{% macro value(v) -%}
+    {% if v is none or v is undefined %}unknown{% else %}{{ v }}{% endif %}
+{%- endmacro %}
+{% macro badge(v) -%}
+    <span class="badge {{ v }}">{{ v }}</span>
+{%- endmacro %}
+{% macro stats(s) %}
+    <div class="stats">
+        <div class="stat">
+            <label>Observed attempts</label>
+            <strong>{{ s.runs }}</strong>
+        </div>
+        <div class="stat">
+            <label>Automatic correct</label>
+            <strong>{{ s.correct }}</strong>
+        </div>
+        <div class="stat">
+            <label>Execution failures</label>
+            <strong>{{ s.failures }}</strong>
+        </div>
+        <div class="stat">
+            <label>Total cost (USD)</label>
+            <strong>{% if s.cost is none %}unknown{% else %}{{ '%.5f'|format(s.cost) }}{% endif %}</strong>
+        </div>
+    </div>
+{% endmacro %}
+{% macro runs(rows) %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Fault / Run</th>
+                    <th>Model / Graph</th>
+                    <th>Verdict / Execution</th>
+                    <th class="number">Cost / Tokens in·out</th>
+                    <th class="number">Wall / Calls</th>
+                    <th>Suite</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                    <tr>
+                        <td>
+                            {% if r.id %}
+                                <a class="run-link" href="/runs/{{ r.id }}">{{ r.fault }}</a>
+                            {% else %}
+                                {{ r.fault }}<small>Report not indexed</small>
+                            {% endif %}
+                            <small class="mono">{{ r.run_id[:8] }} · {{ r.case }}</small>
+                            <small>{{ r.created_at }}</small>
+                        </td>
+                        <td>
+                            {{ r.model or 'unknown' }}<small>{{ r.graph }}</small>
+                        </td>
+                        <td>
+                            {{ badge(r.verdict) }}<small>{{ r.status }}</small>
+                            {% if r.phoenix_url|phoenix_url %}
+                                <a class="button small"
+                                   href="{{ r.phoenix_url|phoenix_url }}"
+                                   target="_blank"
+                                   rel="noreferrer">Open in Phoenix ↗</a>
+                            {% endif %}
+                        </td>
+                        <td class="number">
+                            {% if r.cost is not none %}{{ '%.5f'|format(r.cost) }}{% else %}unknown{% endif %}
+                            <small>{{ value(r.input_tokens) }} / {{ value(r.output_tokens) }}</small>
+                        </td>
+                        <td class="number">
+                            {% if r.wall_seconds is not none %}{{ '%.1f'|format(r.wall_seconds) }}s{% else %}unknown{% endif %}
+                            <small>{{ r.calls }} calls · {{ r.events }} events</small>
+                        </td>
+                        <td>
+                            {% if r.suite %}
+                                <a href="/suites/{{ r.suite }}">{{ r.suite_name }}</a>
+                {% else %}—{% endif %}
+                    </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="6">No runs found. <a href="/run">Run a scripted evaluation</a> or use <code>incident-investigator import &lt;directory&gt;</code>.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endmacro %}

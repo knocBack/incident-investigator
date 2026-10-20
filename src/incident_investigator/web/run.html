@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% import 'macros.html' as m %}
+{% block title %}{{ run.fault }} · Incident Investigator{% endblock %}
+{% block content %}
+    <div class="title-row">
+        <div>
+            <span class="eyebrow">{{ run.suite_name or 'Investigation' }} / {{ run.run_id[:8] }}</span>
+            <h1>{{ run.fault }}</h1>
+            <p class="subtitle">{{ run.model or 'unknown model' }} · {{ run.graph }} · {{ run.case }}</p>
+        </div>
+        <div class="actions">{{ m.badge(run.verdict) }} {{ m.badge(run.status) }}{% if trace.url %}
+            <a class="button small"
+               href="{{ trace.url }}"
+               target="_blank"
+               rel="noreferrer">Open in Phoenix ↗</a>
+{% else %}
+    <span class="button small muted">Phoenix · not captured</span>
+{% endif %}
+<a class="button small" href="/run?grade={{ run.id }}">Grade this run</a>
+</div>
+</div>
+<p class="page-note">{{ run.location }} · Cost USD {{ m.value(run.cost) }} · {{ run.calls }} calls · {{ run.events }} trace events · wall {{ m.value(run.wall_seconds) }}s</p>
+<div class="tabs">
+    {% for name in ['report','grade','rubric','evidence'] %}
+        <a class="button {% if name == tab %}primary{% endif %}"
+           href="/runs/{{ run.id }}?tab={{ name }}">{{ 'Frozen evidence' if name == 'evidence' else name|title }}</a>
+    {% endfor %}
+</div>
+{% if tab == "report" %}
+    <article class="card report">{{ report }}</article>
+    <details>
+        <summary>Raw result.json</summary>
+        <pre>{{ result|pretty }}</pre>
+    </details>
+{% elif tab == "grade" %}
+    <div class="callout warning">Lexical checks and valid citations do not prove semantic support. Complete the human rubric before claiming quality.</div>
+    <div class="grid2">
+        <div class="card">
+            <span class="eyebrow">Actual diagnosis</span>
+            <h2>{{ run.verdict }}</h2>
+            {% for h in result.get('hypotheses',[]) %}
+                <p>{{ h.statement }}</p>
+            {% endfor %}
+            {% for check,passed in grade.get('diagnosis_checks',{}).items() %}
+                <div class="check-row">
+                    <span>{{ check }}</span>{{ m.badge('pass' if passed else 'fail') }}
+                </div>
+            {% endfor %}
+            <h3>Retrieved key evidence</h3>
+            {% for id in grade.get('grounding',{}).get('key_evidence_ids',[]) %}
+                <a class="ref" href="/runs/{{ run.id }}/evidence/{{ id|urlencode }}">{{ id }}</a>
+            {% endfor %}
+            {% if not grade %}
+                <p>Not graded yet. <a href="/run?grade={{ run.id }}">Run the evaluator</a>.</p>
+            {% endif %}
+            <details>
+                <summary>Full grade checks and usage</summary>
+                <pre>{{ grade|pretty }}</pre>
+            </details>
+        </div>
+        <div class="card">
+            <span class="eyebrow">Evaluator only</span>
+            <h2>Expected answer</h2>
+            <pre>{{ expected|pretty }}</pre>
+            <p class="page-note">Expected answers never enter investigator prompts, source snapshots or model spans.</p>
+        </div>
+    </div>
+{% elif tab == "rubric" %}
+    <div class="card">
+        <h2>Does the explanation hold up?</h2>
+        <p>Automatic verdict: {{ run.verdict }}. Record a human judgment and reason for each dimension.</p>
+        <form id="rubric-form" data-run="{{ run.id }}">
+            {% for dimension in dimensions %}
+                {% set entry = review.get('dimensions',{}).get(dimension,{}) %}
+                <div class="rubric-row">
+                    <strong>{{ dimension }}</strong>
+                    <select name="{{ dimension }}-score" aria-label="{{ dimension }} score">
+                        {% for score in ['unreviewed','pass','partial','fail'] %}
+                            <option {% if entry.get('score','unreviewed') == score %}selected{% endif %}>{{ score }}</option>
+                        {% endfor %}
+                    </select>
+                    <textarea maxlength="10000"
+                              name="{{ dimension }}-reason"
+                              aria-label="{{ dimension }} reason"
+                              placeholder="Reason and evidence IDs">{{ entry.get('reason','') }}</textarea>
+                </div>
+            {% endfor %}
+            <div class="sticky-actions">
+                <p class="caption"
+                   id="rubric-status"
+                   role="status">Saved as a workspace sidecar; imported sources are never modified.</p>
+                <button class="button primary">Save human rubric</button>
+            </div>
+        </form>
+    </div>
+{% else %}
+    <div class="callout {% if not frozen %}warning{% else %}info{% endif %}">
+        {% if frozen %}Full frozen input retained. This table shows the source observations the run was given, including records it may not have retrieved.{% else %}Historical full snapshot unavailable. This table shows retrieved evidence only. New runs retain the exact frozen source snapshot.{% endif %}
+    </div>
+    <div class="card">
+        <h3>Source identity</h3>
+        <p>
+            Dataset digest: <code>{{ result.get('dataset_digest', 'unknown') }}</code>
+        </p>
+        <details>
+            <summary>Frozen manifest</summary>
+            <pre>{{ snapshot|pretty }}</pre>
+        </details>
+    </div>
+    <form class="filters">
+        <input type="hidden" name="tab" value="evidence">
+        <label>
+            Source<select name="source">
+            <option value="">All</option>
+            {% for source in telemetry.sources %}
+                <option {% if request.query_params.get('source') == source %}selected{% endif %}>{{ source }}</option>
+            {% endfor %}
+            </select>
+        </label>
+        <label>
+            Service<select name="service">
+            <option value="">All</option>
+            {% for service in telemetry.services %}
+                <option {% if request.query_params.get('service') == service %}selected{% endif %}>{{ service }}</option>
+            {% endfor %}
+            </select>
+        </label>
+        {% for field in ['start','end'] %}
+            <label>
+                {{ field|title }} (UTC offset)<input name="{{ field }}"
+       value="{{ request.query_params.get(field,'') }}"
+       placeholder="2026-10-19T00:00:00Z">
+            </label>
+        {% endfor %}
+        <button class="button">Filter</button>
+    </form>
+    <p>{{ telemetry.count }} matching observations; showing up to 1,000. Evidence IDs open records actually retrieved by the run.</p>
+    <div class="card flush">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID / source</th>
+                        <th>Service / time</th>
+                        <th>Observation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in telemetry.rows %}
+                        <tr>
+                            <td>
+                                {% if row.evidence_id %}
+                                    <a class="ref"
+                                       href="/runs/{{ run.id }}/evidence/{{ row.evidence_id|urlencode }}">{{ row.evidence_id }}</a>
+                                {% else %}
+                                    <code>{{ row.source_record_id }}</code>
+                                {% endif %}
+                                <small>{{ row.source }}</small>
+                            </td>
+                            <td>
+                                {{ row.data.get('service', '') }}<small>{{ row.event_time }}</small>
+                            </td>
+                            <td>
+                                <details>
+                                    <summary>Open source observation</summary>
+                                    <pre>{{ row|pretty }}</pre>
+                                </details>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}

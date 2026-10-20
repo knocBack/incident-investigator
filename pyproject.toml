@@ -12,15 +12,23 @@ dependencies = [
   "aiosqlite==0.22.1",
   "fastapi",
   "httpx",
+  "jinja2>=3.1.6",
   "langchain-core==1.6.12",
   "langgraph==1.2.16",
   "langgraph-checkpoint-sqlite==3.1.2",
+  "markdown-it-py>=4.2.0",
   "pydantic==2.12.5",
   "uvicorn",
 ]
 
 [project.scripts]
 incident-investigator = "incident_investigator.cli:main"
+
+[project.optional-dependencies]
+phoenix = [
+    "arize-phoenix-otel>=0.17.2",
+    "openinference-instrumentation-langchain>=0.1.79",
+]
 
 [dependency-groups]
 dev = [
@@ -48,3 +56,4 @@ packages = ["src/incident_investigator"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "evals/expected" = "incident_investigator/grading/expected"
+"tests/scripted-demo.json" = "incident_investigator/scripted-demo.json"

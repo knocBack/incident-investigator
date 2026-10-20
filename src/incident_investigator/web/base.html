@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <meta name="console-token" content="{{ token }}">
+        <title>{% block title %}Incident Investigator{% endblock %}</title>
+        <link rel="stylesheet" href="/static/console.css">
+        <script src="/static/console.js" defer></script>
+    </head>
+    <body>
+        <div class="layout">
+            <aside class="sidebar">
+                <a class="brand" href="/">
+                    <span class="brand-mark">ii</span>
+                    <span>Incident
+                        <br>
+                        Investigator<small>LOCAL EVAL CONSOLE</small>
+                    </span>
+                </a>
+                <nav>
+                    <a href="/">▤ &nbsp; Runs & suites</a>
+                    <a href="/run">＋ &nbsp; Run evaluation</a>
+                    <a href="/compare">⇄ &nbsp; Compare</a>
+                </nav>
+                <div class="side-foot">
+                    Local-only · no account
+                    <br>
+                    Agent behavior opens in Phoenix.
+                    <br>
+                    <small>{{ home }}</small>
+                </div>
+            </aside>
+            <main class="main">
+                <header class="topbar">
+                    <span class="crumb">Workspace / {% block crumb %}Evaluation console{% endblock %}</span>
+                    <a class="button small" href="/run">Run evaluation</a>
+                </header>
+                <div class="content">
+                    {% block content %}{% endblock %}
+                    <footer>
+                        Local artifacts · unknown usage remains unknown · automatic grades require human semantic review.
+                    </footer>
+                </div>
+            </main>
+        </div>
+    </body>
+</html>

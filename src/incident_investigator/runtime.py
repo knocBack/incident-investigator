@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import time
 from functools import cache, reduce
 from operator import or_
@@ -26,7 +27,7 @@ from incident_investigator.contracts import (
     action_type,
 )
 from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
-from incident_investigator.models import CodexExecModel, ModelAdapter, ScriptedModel
+from incident_investigator.models import CodexExecModel, ModelAdapter, ModelCallError, ScriptedModel
 from incident_investigator.reliability import (
     invocation_lock,
     resume_metadata,
@@ -42,6 +43,7 @@ from incident_investigator.repair import (
     repair_result,
 )
 from incident_investigator.sources.loader import CaseSnapshot
+from incident_investigator.telemetry.tracing import TraceSession
 from incident_investigator.tools import DESCRIPTIONS, build_registry, query_identity
 from incident_investigator.tools.contracts import QUERY_MODELS, ToolPage
 from incident_investigator.tools.core import UNBOUNDED_START, describe_validation
@@ -220,6 +222,7 @@ class Investigation:
         self.invocation_id = identity()
         self.started = time.monotonic()
         self.deadline = self.started + limits.wall_seconds
+        self.observer = TraceSession(out.name, snapshot.case_id, graph=graph, enabled=False)
         self.adapters = {role: TypeAdapter(action_type(body)) for role, body in PAYLOADS.items()}
 
     def trace(self, event: str, **values: Any) -> None:
@@ -807,6 +810,7 @@ class Investigation:
     def checkpoint(self, c: Control) -> dict:
         if c.status != "running":
             c.dispatch = []
+        self.observer.sync(c)
         c.revision += 1
         self.trace(
             "state_transition",
@@ -831,8 +835,23 @@ class Investigation:
                     }
                 }
             }
+        with self.observer.call(call) as span:
+            return await self._execute(state, span)
+
+    async def _execute(self, state: dict, span) -> dict:
+        call = Call.model_validate(state["call"])
         started = time.monotonic()
         receipt = {"payload": None, "error": None, "usage": None}
+        if span and call.kind == "model":
+            resolve = getattr(self.model, "model_for_role", None)
+            span.set_attribute(
+                "llm.model_name",
+                resolve(call.role)
+                if resolve
+                else "scripted"
+                if isinstance(self.model, ScriptedModel)
+                else type(self.model).__name__,
+            )
         try:
             async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
                 async with self.semaphore, runner_capacity():
@@ -864,6 +883,7 @@ class Investigation:
                                     ),
                                 },
                             ]
+                            self.observer.input(span, messages)
                             result = await self.model.complete(messages, schema)
                             receipt["payload"] = result.action.get("action", result.action)
                             receipt["raw_id"] = result.raw_id
@@ -883,6 +903,7 @@ class Investigation:
                                 )
                                 return ToolPage.model_validate(payload)
 
+                            self.observer.input(span, call.request)
                             fault = FaultSelection(**call.fault)
                             page = await apply_fault(query, fault, timeout_seconds=timeout)()
                             receipt["payload"] = page.model_dump(mode="json")
@@ -894,6 +915,10 @@ class Investigation:
         except Exception as exc:
             receipt["error"] = f"{type(exc).__name__}: {exc}"
             receipt["retryable"] = getattr(exc, "retryable", True)
+            if call.kind == "model" and isinstance(exc, ModelCallError) and exc.before_send:
+                receipt["before_send"] = True
+                receipt["usage"] = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        self.observer.output(span, receipt)
         receipt["latency_ms"] = round((time.monotonic() - started) * 1000, 3)
         self.trace(
             f"{call.kind}_call",
@@ -953,7 +978,7 @@ async def saved_progress(compiled, config) -> dict | None:
 async def investigate(
     snapshot: CaseSnapshot | None,
     model: ModelAdapter,
-    out: Path = Path("runs"),
+    out: Path | None = None,
     *,
     limits: Limits | None = None,
     semaphore: asyncio.Semaphore | None = None,
@@ -964,10 +989,12 @@ async def investigate(
     """Start or resume one fenced investigation under its original finite limits."""
     from langsmith import tracing_context
 
-    from incident_investigator.reporting import export_report
+    from incident_investigator.reporting import export_report, retain_snapshot
+    from incident_investigator.workspace import home, write_json
 
     if graph not in {"hub", "staged"}:
         raise ValueError(f"unknown graph: {graph}")
+    out = out if out is not None else home() / "runs"
     run_dir = Path(resume) if resume else out / identity()
     if not resume:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -991,6 +1018,9 @@ async def investigate(
             limits = limits or Limits()
             metadata = {
                 "run_id": run_dir.name,
+                "launch_id": os.environ.get("II_LAUNCH_ID"),
+                "created": time.time(),
+                "dataset_digest": snapshot.dataset_digest,
                 "case_id": snapshot.case_id,
                 "limits": limits.model_dump(),
                 "graph": graph,
@@ -1007,7 +1037,8 @@ async def investigate(
                 },
             }
             save_source(snapshot, run_dir)
-            (run_dir / "run.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            retain_snapshot(snapshot, run_dir)
+            write_json(run_dir / "run.json", metadata)
         runner = Investigation(
             snapshot,
             model,
@@ -1030,33 +1061,38 @@ async def investigate(
             "callbacks": [],
             "recursion_limit": 1000,
         }
-        async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
-            compiled = runner.graph().compile(checkpointer=saver)
-            try:
-                with tracing_context(enabled=False):
-                    result = await compiled.ainvoke(
-                        None
-                        if resume
-                        else {"control": initial.model_dump(mode="json"), "inbox": {}},
-                        config=config,
-                        durability="sync",
-                    )
-            except BaseException as exc:
-                # Export is derived; the checkpoint remains resumable at its last durable boundary.
-                progress = await saved_progress(compiled, config)
-                if progress:
-                    progress = copy.deepcopy(progress)
-                    c = progress["control"]
-                    c["status"] = (
-                        "interrupted"
-                        if isinstance(
-                            exc, asyncio.CancelledError | KeyboardInterrupt | NodeCancelledError
+        with TraceSession(metadata["run_id"], snapshot.case_id, graph=graph) as observer:
+            runner.observer = observer
+            await observer.save_link(run_dir, final=False)
+            async with AsyncSqliteSaver.from_conn_string(str(run_dir / "state.sqlite")) as saver:
+                compiled = runner.graph().compile(checkpointer=saver)
+                try:
+                    with tracing_context(enabled=False):
+                        result = await compiled.ainvoke(
+                            None
+                            if resume
+                            else {"control": initial.model_dump(mode="json"), "inbox": {}},
+                            config=config,
+                            durability="sync",
                         )
-                        else "failed"
-                    )
-                    c["partial"] = True
-                    c["stop_reason"] = c["status"]
-                    export_report(progress, snapshot, run_dir)
-                raise
+                except BaseException as exc:
+                    # Export is derived; the checkpoint remains resumable at its last durable boundary.
+                    progress = await saved_progress(compiled, config)
+                    if progress:
+                        progress = copy.deepcopy(progress)
+                        c = progress["control"]
+                        c["status"] = (
+                            "interrupted"
+                            if isinstance(
+                                exc, asyncio.CancelledError | KeyboardInterrupt | NodeCancelledError
+                            )
+                            else "failed"
+                        )
+                        c["partial"] = True
+                        c["stop_reason"] = c["status"]
+                        export_report(progress, snapshot, run_dir)
+                    raise
+            observer.finish(result["control"])
         export_report(result, snapshot, run_dir)
+        await runner.observer.save_link(run_dir)
     return run_dir

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+    <span class="eyebrow">{{ kind }}</span>
+    <h1>Saved evidence record</h1>
+    <p class="mono">{{ evidence_id }}</p>
+    <p>
+        <a href="/runs/{{ run.id }}">← Report</a> · <a href="/runs/{{ run.id }}?tab=grade">Grade</a> · <a href="/runs/{{ run.id }}?tab=evidence">Frozen evidence</a>
+    </p>
+    <div class="card">
+        <pre>{{ record|pretty }}</pre>
+    </div>
+{% endblock %}
