@@ -312,7 +312,7 @@ async def test_every_role_prompt_explains_json_registry_requests(tmp_path):
         assert "Registry names and argument schemas:" in rendered[0]["content"]
         for name in context["tools"]:
             assert name in rendered[0]["content"]
-    assert roles == set(PAYLOADS)
+    assert roles == set(PAYLOADS) - {"single"}
 
 
 async def test_upstream_rate_limit_detail_is_surfaced_and_redacted(configured):

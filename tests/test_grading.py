@@ -208,7 +208,6 @@ async def test_guard_reservations_are_atomic_under_concurrency():
 
 
 async def test_429_releases_bounded_reservation():
-
     class Adapter:
         def model_for_role(self, role):
             return "test/model"

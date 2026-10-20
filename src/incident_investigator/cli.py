@@ -16,6 +16,7 @@ from incident_investigator.contracts import PROFILES, Limits
 from incident_investigator.graph_config import DEFAULT_GRAPH, add_graph_argument
 from incident_investigator.lab.__main__ import snapshot
 from incident_investigator.lab.app import FAULTS, JsonlTelemetrySink, create_app
+from incident_investigator.lab.cases import SECOND_CASES, VARIANTS, freeze_case
 from incident_investigator.models import CodexExecModel, OpenRouterModel, ScriptedModel
 from incident_investigator.runtime import investigate
 from incident_investigator.sources.loader import load_snapshot
@@ -46,12 +47,41 @@ def model(args):
 
 async def demo(args) -> Path:
     """Exercise the real FastAPI routes in-process; investigators see only a snapshot."""
+    cached = getattr(args, "_snapshot", None)
+    if cached is not None:
+        directory = await investigate(
+            cached,
+            model(args),
+            args.out,
+            limits=profile(args),
+            graph="single"
+            if getattr(args, "system", "multi") == "single"
+            else getattr(args, "graph", DEFAULT_GRAPH),
+        )
+        (directory / "expectation.json").write_text(json.dumps({"family": args.fault}) + "\n")
+        return directory
+    if args.fault in {**SECOND_CASES, **VARIANTS}:
+        with tempfile.TemporaryDirectory(prefix="ii-case-") as directory:
+            root = Path(directory)
+            await freeze_case(args.fault, root)
+            case = load_snapshot(args.fault, root)
+        if getattr(args, "_freeze_only", False):
+            return case
+        args._snapshot = case
+        return await demo(args)
     with tempfile.TemporaryDirectory(prefix="ii-demo-") as directory:
         root = Path(directory)
         telemetry = root / "telemetry.jsonl"
         # A simulated clock spaces baseline, fault and failing load seconds apart (ending
         # before now), so before/after comparisons and change times are meaningful.
-        moment = [datetime.now(UTC) - timedelta(seconds=40)]
+        moment = [
+            (
+                datetime(2026, 1, 1, 14, 10, tzinfo=UTC)
+                if getattr(args, "_fixed_clock", False)
+                else datetime.now(UTC)
+            )
+            - timedelta(seconds=40)
+        ]
         app = create_app(clock=lambda: moment[0], telemetry_sink=JsonlTelemetrySink(telemetry))
         # M1 metrics cover ten-second windows; include the whole baseline window.
         start = moment[0] - timedelta(seconds=11)
@@ -81,12 +111,17 @@ async def demo(args) -> Path:
                     start=start,
                 )
             )
+            frozen = load_snapshot("lab-demo", source_root)
+            if getattr(args, "_freeze_only", False):
+                return frozen
             directory = await investigate(
-                load_snapshot("lab-demo", source_root),
+                frozen,
                 getattr(args, "_model_adapter", None) or model(args),
                 args.out,
                 limits=profile(args),
-                graph=getattr(args, "graph", DEFAULT_GRAPH),
+                graph="single"
+                if getattr(args, "system", "multi") == "single"
+                else getattr(args, "graph", DEFAULT_GRAPH),
             )
             # Evaluator metadata stays outside the temporary agent-visible source root.
             (directory / "expectation.json").write_text(
@@ -116,7 +151,9 @@ async def run(args) -> int:
                     args.out,
                     semaphore=semaphore,
                     limits=profile(args),
-                    graph=getattr(args, "graph", DEFAULT_GRAPH),
+                    graph="single"
+                    if getattr(args, "system", "multi") == "single"
+                    else getattr(args, "graph", DEFAULT_GRAPH),
                 )
                 for case in snapshots
             ]

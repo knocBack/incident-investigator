@@ -135,6 +135,32 @@ def price_bound(info, *, max_input_tokens=64000, output_tokens=4096):
     return (prompt_tokens * prompt + amount(output_tokens) * completion) * D("1.10")
 
 
+class RunSpendGuard(SpendGuard):
+    """Require both a run allowance and the shared suite allowance before dispatch."""
+
+    def __init__(self, parent, cap):
+        super().__init__(0, cap)
+        self.parent = parent
+        self.parent_ids = {}
+
+    async def reserve(self, bound):
+        ident = await super().reserve(bound)
+        try:
+            self.parent_ids[ident] = await self.parent.reserve(bound)
+        except BaseException:
+            await super().release(ident)
+            raise
+        return ident
+
+    async def finish(self, ident, cost, *, source="response"):
+        await self.parent.finish(self.parent_ids.pop(ident), cost, source=source)
+        await super().finish(ident, cost, source=source)
+
+    async def release(self, ident):
+        await self.parent.release(self.parent_ids.pop(ident))
+        await super().release(ident)
+
+
 class BoundedModel:
     def __init__(self, adapter, catalog, guard, *, max_input_tokens=64000):
         self.adapter, self.catalog, self.guard = adapter, catalog, guard

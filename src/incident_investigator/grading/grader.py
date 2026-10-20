@@ -12,7 +12,7 @@ from pathlib import Path
 
 from incident_investigator.graph_config import recorded_graph
 
-VERSION = "grader.v1"
+VERSION = "grader.v2"
 _SOURCE_EXPECTED = Path(__file__).resolve().parents[3] / "evals" / "expected"
 EXPECTED = Path(
     os.environ.get(
@@ -22,9 +22,14 @@ EXPECTED = Path(
 ).expanduser()
 FAMILIES = tuple(sorted(p.stem for p in (EXPECTED / "faults").glob("*.json")))
 
+CASES = ("case-02", "case-04", "case-06", "case-08", "case-10", "reliability-01", "reliability-02")
+
 
 def expectation(family):
-    return json.loads((EXPECTED / "faults" / f"{family}.json").read_text(encoding="utf-8"))
+    if family not in FAMILIES and family not in CASES:
+        raise ValueError("unknown expectation")
+    group = "faults" if family in FAMILIES else "cases"
+    return json.loads((EXPECTED / group / f"{family}.json").read_text())
 
 
 def matches(row, matcher):
@@ -114,11 +119,33 @@ def grade(result, expected, events=()):
         re.search(pattern, statement, re.I) for pattern in expected["mechanism_keywords"]
     )
     key_cited = bool(set(top.get("supporting_evidence", [])) & key_ids)
+    cited = set(top.get("supporting_evidence", [])) & valid
+    required = all(
+        any(any(matches(evidence[key], matcher) for matcher in group) for key in cited)
+        for group in expected.get("required_evidence_groups", [])
+    )
+    if expected.get("required_evidence_groups"):
+        required = required and set(top.get("supporting_evidence", [])) <= valid
+    if expected.get("expected_diagnosis") == "inconclusive":
+        text = json.dumps({"hypotheses": hypotheses, "report": report}).lower()
+        justified = (
+            result.get("diagnosis") == "inconclusive"
+            and result.get("status") == "completed"
+            and service
+            and required
+            and bool(cited)
+            and all(re.search(pattern, text, re.I) for pattern in expected["uncertainty_keywords"])
+            and not any(re.search(pattern, text, re.I) for pattern in expected["forbidden_claims"])
+        )
+    else:
+        justified = False
     if not report or not report.get("summary", "").strip():
         verdict = "no_report"
+    elif expected.get("expected_diagnosis") == "inconclusive":
+        verdict = "correct" if justified else "wrong"
     elif not hypotheses or result.get("diagnosis") == "inconclusive":
         verdict = "inconclusive"
-    elif service and mechanism and key_cited:
+    elif service and mechanism and key_cited and required:
         verdict = "correct"
     elif service or key_cited:
         verdict = "partial"
@@ -178,11 +205,18 @@ def grade(result, expected, events=()):
         "family": expected["family"],
         "run_id": result.get("run_id"),
         "graph": recorded_graph(result.get("graph")),
+        "system": "single" if result.get("graph") == "single" else "multi",
+        "case_id": result.get("case_id"),
+        "suite_kind": "reliability"
+        if expected.get("expected_diagnosis") or expected.get("reliability")
+        else "primary",
         "verdict": verdict,
         "diagnosis_checks": {
             "culprit_service": service,
             "mechanism": bool(mechanism),
             "key_evidence_cited": key_cited,
+            "required_evidence_groups": required,
+            "justified_uncertainty": justified,
         },
         "grounding": {
             "hypothesis_claim_fraction": sum(claim_supported) / len(claim_supported)

@@ -1,0 +1,69 @@
+{
+  "version": "cases.v1",
+  "family": "bad_configuration",
+  "culprit_service": "checkout",
+  "mechanism_keywords": [
+    "unresolved"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "metrics",
+      "service": "checkout",
+      "predicates": {
+        "name": {
+          "eq": "error_percent"
+        }
+      }
+    },
+    {
+      "source": "changes",
+      "service": "checkout",
+      "predicates": {
+        "attributes.configuration_diff": {
+          "eq": "unavailable"
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "metrics",
+        "service": "checkout",
+        "predicates": {
+          "name": {
+            "eq": "error_percent"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "changes",
+        "service": "checkout",
+        "predicates": {
+          "attributes.configuration_diff": {
+            "eq": "unavailable"
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "database contention"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review.",
+  "reliability": true,
+  "expected_diagnosis": "inconclusive",
+  "uncertainty_keywords": [
+    "checkout",
+    "log|configuration",
+    "unavailable|missing|cannot|inconclusive",
+    "obtain|retrieve|inspect|need|collect"
+  ],
+  "forbidden_claims": [
+    "inventroy",
+    "misspell",
+    "hostname typo"
+  ]
+}

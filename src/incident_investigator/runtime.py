@@ -212,7 +212,7 @@ class Investigation:
         faults: dict[str, FaultSelection] | None = None,
         graph: GraphVariant = DEFAULT_GRAPH,
     ) -> None:
-        if graph != DEFAULT_GRAPH:
+        if graph not in {"staged", "single"}:
             raise ValueError(f"unknown graph: {graph}")
         self.snapshot, self.model, self.out, self.limits = snapshot, model, out, limits
         self.semaphore = semaphore
@@ -286,8 +286,12 @@ class Investigation:
             **(
                 {
                     "budget": {
-                        "task_model_calls": control.limits.task_model_calls,
-                        "task_tool_calls": control.limits.task_tool_calls,
+                        "task_model_calls": control.limits.max_model_calls
+                        if role == "single"
+                        else control.limits.task_model_calls,
+                        "task_tool_calls": control.limits.max_tool_calls
+                        if role == "single"
+                        else control.limits.task_tool_calls,
                         "note": "Identical repeated queries are answered from earlier "
                         "receipts without a tool call. Start with catalog to learn names.",
                     }
@@ -425,7 +429,13 @@ class Investigation:
         total = sum(call.kind == kind for call in c.calls.values())
         cap = c.limits.max_model_calls if kind == "model" else c.limits.max_tool_calls
         count = task.model_calls if kind == "model" else task.tool_calls
-        task_cap = c.limits.task_model_calls if kind == "model" else c.limits.task_tool_calls
+        task_cap = (
+            cap
+            if task.role == "single"
+            else c.limits.task_model_calls
+            if kind == "model"
+            else c.limits.task_tool_calls
+        )
         if time.monotonic() >= self.deadline or total >= cap:
             self.close(c, "resource_exhausted", f"{kind} call or wall time limit")
             return
@@ -442,7 +452,12 @@ class Investigation:
                 "remaining_tool_calls": max(
                     0,
                     min(
-                        c.limits.task_tool_calls - task.tool_calls,
+                        (
+                            c.limits.max_tool_calls
+                            if task.role == "single"
+                            else c.limits.task_tool_calls
+                        )
+                        - task.tool_calls,
                         c.limits.max_tool_calls - tool_total,
                     ),
                 ),
@@ -600,12 +615,15 @@ class Investigation:
                 # Model IDs are labels only; authoritative identities are runtime allocated.
                 field = {
                     "reasoning": ("hypotheses", "hypothesis_id"),
+                    "single": ("hypotheses", "hypothesis_id"),
                     "critic": ("objections", "objection_id"),
                 }.get(task.role)
                 if field:
                     for item in data["result"][field[0]]:
                         item["model_label"] = item[field[1]]
                         item[field[1]] = identity()
+                if task.role == "single":
+                    data["result"]["report"]["revision_id"] = task.task_id
                 task.result, task.status, task.phase = data["result"], "succeeded", "settled"
             self.record_repairs(c, task, call.call_id, repairs)
             self.trace(
@@ -629,7 +647,9 @@ class Investigation:
                 outcome="rejected",
                 error=error,
             )
-            allowance = task.model_calls < c.limits.task_model_calls
+            allowance = task.model_calls < (
+                c.limits.max_model_calls if task.role == "single" else c.limits.task_model_calls
+            )
             if task.corrections == 0 and allowance:
                 task.corrections += 1
                 task.phase = "model"
@@ -739,7 +759,9 @@ class Investigation:
             if key in c.query_index:
                 self.replay(c, task, c.query_index[key], request)
                 continue
-            if task.tool_calls >= c.limits.task_tool_calls:
+            if task.tool_calls >= (
+                c.limits.max_tool_calls if task.role == "single" else c.limits.task_tool_calls
+            ):
                 notes.append(f"{request['name']}: task tool-call allowance exhausted; not run")
                 continue
             self.admit(c, task, "tool", request, query=key)
@@ -935,13 +957,17 @@ class Investigation:
         return {"inbox": {call.call_id: receipt}}
 
     def graph(self):
-        """Build the checkpointed staged workflow."""
+        """Select a workflow while sharing admission, execution and receipts."""
+        if self.variant == "single":
+            from incident_investigator.single import build_single_graph
+
+            return build_single_graph(self)
         from incident_investigator.staged import build_staged_graph
 
         return build_staged_graph(self)
 
 
-def model_names(model: ModelAdapter) -> dict[str, str]:
+def model_names(model: ModelAdapter, graph: GraphVariant = DEFAULT_GRAPH) -> dict[str, str]:
     resolve = getattr(model, "model_for_role", None)
     return {
         role: resolve(role)
@@ -951,7 +977,7 @@ def model_names(model: ModelAdapter) -> dict[str, str]:
         else "gpt-6-luna"
         if isinstance(model, CodexExecModel)
         else type(model).__name__
-        for role in PAYLOADS
+        for role in (["single"] if graph == "single" else [r for r in PAYLOADS if r != "single"])
     }
 
 
@@ -988,19 +1014,20 @@ async def investigate(
     from incident_investigator.reporting import export_report, retain_snapshot
     from incident_investigator.workspace import home, write_json
 
-    if graph != DEFAULT_GRAPH:
+    if graph not in {"staged", "single"}:
         raise ValueError(f"unknown graph: {graph}")
     out = out if out is not None else home() / "runs"
     run_dir = Path(resume) if resume else out / identity()
     if not resume:
         run_dir.mkdir(parents=True, exist_ok=False)
     with invocation_lock(run_dir):
-        models = model_names(model)
+        models = model_names(model, graph)
         if resume:
             metadata, restored = resume_metadata(run_dir)
             if snapshot is not None and snapshot.dataset_digest != restored.dataset_digest:
                 raise ValueError("incompatible resume dataset")
             snapshot = restored
+            models = model_names(model, metadata["graph"])
             if models != metadata["models"]:
                 raise ValueError("incompatible resume model configuration")
             if limits is not None and limits.model_dump() != metadata["limits"]:

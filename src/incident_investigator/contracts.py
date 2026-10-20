@@ -6,7 +6,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-Role = Literal["orchestrator", "observability", "dependency", "reasoning", "critic", "reporting"]
+Role = Literal[
+    "orchestrator", "observability", "dependency", "reasoning", "critic", "reporting", "single"
+]
 Specialist = Literal["observability", "dependency"]
 
 
@@ -141,6 +143,10 @@ class ToolRequest(Record):
     arguments: dict[str, JsonValue]
 
 
+class SingleResult(ReasoningResult):
+    report: Report
+
+
 class ToolsAction(Record):
     kind: Literal["tools"]
     requests: list[ToolRequest] = Field(min_length=1, max_length=5)
@@ -166,6 +172,7 @@ PAYLOADS = {
     "reasoning": ReasoningResult,
     "critic": Review,
     "reporting": Report,
+    "single": SingleResult,
 }
 ALLOWED_TOOLS = {
     "observability": {
@@ -180,3 +187,4 @@ ALLOWED_TOOLS = {
     # Dependency follows the call path, so it can check downstream health in aggregate.
     "dependency": {"catalog", "dependencies", "changes", "history", "log_counts", "metric_stats"},
 }
+ALLOWED_TOOLS["single"] = set().union(*ALLOWED_TOOLS.values())

@@ -211,7 +211,7 @@ def test_eval_suite_uses_staged(
     batch = json.loads((tmp_path / "batch" / "batch.json").read_text())
     board = json.loads((tmp_path / "batch" / "leaderboard.json").read_text())
     assert batch["graph"] == (variant or "staged")
-    assert len(board["runs"]) == 5
+    assert len(board["runs"]) == 10
     assert all(row["graph"] == (variant or "staged") for row in board["models"])
     assert all(
         json.loads(path.read_text())["graph"] == (variant or "staged")

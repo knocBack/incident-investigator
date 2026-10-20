@@ -3,14 +3,17 @@
 from argparse import ArgumentParser
 from typing import Literal
 
-GraphVariant = Literal["staged"]
+GraphVariant = Literal["staged", "single"]
 DEFAULT_GRAPH: GraphVariant = "staged"
 GRAPH_HELP = "staged: stage nodes and conditional edges (the only supported workflow)"
 
 
-def add_graph_argument(parser: ArgumentParser) -> None:
-    """Expose the recorded workflow name consistently across investigation commands."""
+def add_graph_argument(parser: ArgumentParser, *, allow_both: bool = False) -> None:
+    """Expose the workflow and system choices consistently."""
     parser.add_argument("--graph", choices=["staged"], default=DEFAULT_GRAPH, help=GRAPH_HELP)
+    parser.add_argument(
+        "--system", choices=["multi", "single", *(["both"] if allow_both else [])], default="multi"
+    )
 
 
 def recorded_graph(value: str | None) -> str:

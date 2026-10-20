@@ -1,0 +1,78 @@
+{
+  "version": "cases.v1",
+  "family": "database_contention",
+  "culprit_service": "inventory",
+  "mechanism_keywords": [
+    "deadlock",
+    "order|A.*B.*B.*A"
+  ],
+  "key_evidence_matchers": [
+    {
+      "source": "logs",
+      "service": "database",
+      "predicates": {
+        "body": {
+          "regex": "deadlock detected"
+        }
+      }
+    },
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "attributes.lock_order": {
+          "eq": "A then B"
+        }
+      }
+    },
+    {
+      "source": "logs",
+      "service": "inventory",
+      "predicates": {
+        "attributes.lock_order": {
+          "eq": "B then A"
+        }
+      }
+    }
+  ],
+  "required_evidence_groups": [
+    [
+      {
+        "source": "logs",
+        "service": "database",
+        "predicates": {
+          "body": {
+            "regex": "deadlock detected"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "attributes.lock_order": {
+            "eq": "A then B"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "source": "logs",
+        "service": "inventory",
+        "predicates": {
+          "attributes.lock_order": {
+            "eq": "B then A"
+          }
+        }
+      }
+    ]
+  ],
+  "wrong_alternatives": [
+    "database outage",
+    "connection exhaustion"
+  ],
+  "precision": "Development case; lexical and provenance checks require human semantic review."
+}
