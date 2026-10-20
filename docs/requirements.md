@@ -13,7 +13,7 @@ Given an alert and operational evidence, investigate likely causes and recommend
 
 ## Remaining evaluation work
 
-The ten paired incidents, reliability variants and matched single-agent comparison are still pending. See [evaluation](evaluation.md#upcoming-multi-agent-versus-single-agent-comparison) for their status.
+The ten primary incidents, both reliability variants and the single-agent baseline exist. One exploratory comparison has run; a repeated, matched comparison is still pending. See [evaluation](evaluation.md#multi-agent-vs-single-agent-results).
 
 ## Constraints
 

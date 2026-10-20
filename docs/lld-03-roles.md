@@ -1,7 +1,7 @@
 # Role and coordination contracts
 
 The staged runtime implements the six-role loop with bounded follow-up and compatible
-checkpoint resume. The baseline and expanded evaluation suite remain a separate change.
+checkpoint resume. The single-agent baseline is described in [evaluation](evaluation.md#what-is-evaluated).
 `contracts.py` supplies Pydantic schemas; unexpected fields are rejected.
 
 Every model emits either `tools {requests: [{name, arguments}]}` or

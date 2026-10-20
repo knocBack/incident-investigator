@@ -72,13 +72,13 @@ Evidence comes from the fault lab today. Sources sit behind a typed registry, so
 
 ## Console
 
-Browse runs, read reports and check each citation against the frozen evidence. See the [console guide](docs/ui.md).
+Launch runs, watch them live, compare multi vs single and check each citation. See the [console guide](docs/ui.md).
 
 <p align="center">
   <img src="docs/assets/ui-runs.png" width="49%" alt="Runs and suites list">
-  <img src="docs/assets/ui-evidence.png" width="49%" alt="Frozen evidence with clickable IDs">
+  <img src="docs/assets/ui-suite.png" width="49%" alt="Multi-agent vs single-agent summary per incident">
 </p>
-<p align="center"><em>Left: all runs and suites. Right: a run's frozen evidence, with clickable IDs.</em></p>
+<p align="center"><em>Left: all runs and suites. Right: multi vs single, one sentence per incident.</em></p>
 
 <p align="center">
   <img src="docs/assets/ui-grade.png" width="70%" alt="Automatic grade beside the expected answer">
@@ -93,18 +93,16 @@ Browse runs, read reports and check each citation against the frozen evidence. S
 | Six-role staged investigation | ✅ Done |
 | Checkpoint resume and tool-failure recovery | ✅ Done |
 | Offline grader and repeated evaluation suites | ✅ Done |
-| Local evaluation console | ✅ Done |
-| Ten paired incidents and single-agent baseline | 🔜 In progress |
-| Multi-agent vs single-agent comparison | 🔜 **Results pending** |
+| Local evaluation console with budget check and cancel | ✅ Done |
+| Ten paired incidents and single-agent baseline | ✅ Done |
+| Multi-agent vs single-agent comparison | 🔜 First run done, repeats next |
 
-An [early exploratory re-grade](evals/results/exploratory-2026-10-19/README.md) of ten development runs found 1 correct, 4 inconclusive and 5 with no report. Their setups varied, so this is not an accuracy estimate.
-
-**Multi-agent vs single-agent: results pending.** No comparison numbers exist yet. [Evaluation](docs/evaluation.md) describes the method.
+📊 **First comparison** (DeepSeek V3.2, five incidents, one attempt each, USD 0.441): 3 pairs completed, and each system was correct on one of them. With n = 1, there is no winner yet. See the [results](docs/evaluation.md#multi-agent-vs-single-agent-results).
 
 ## What's next
 
-- [x] **Never lose a run:** resume an investigation after a crash
-- [ ] **One agent vs a team:** a public scoreboard on 10 incidents (in progress)
+- [x] **One agent vs a team:** paired incidents and a first head-to-head run
+- [ ] **A real scoreboard:** repeats on all 10 incidents and both reliability variants
 - [ ] **Start from a real alert:** an alerting webhook kicks off an investigation automatically
 - [ ] **First real data source:** read live metrics from Prometheus
 - [ ] **Answer in chat:** post a short summary to Slack, with a link to the full report
@@ -115,12 +113,12 @@ An [early exploratory re-grade](evals/results/exploratory-2026-10-19/README.md) 
 | Doc | What it covers |
 | --- | --- |
 | [Quick start](docs/quick-start.md) | Free demo, grading, suites and OpenRouter setup |
-| [Console guide](docs/ui.md) | The local console, with screenshots |
+| [Console guide](docs/ui.md) | Launching, watching, cancelling and comparing, with screenshots |
 | [Usage reference](docs/usage.md) | All commands and options |
 | [Architecture](docs/architecture.md) | Components, roles, state, checkpoints and repository layout |
 | [Workflow](docs/graph.md) | The staged graph and its routes |
 | [Decisions](docs/decisions.md) | Key design choices and their tradeoffs |
-| [Evaluation](docs/evaluation.md) | Verdicts, metrics, results and the [plan](docs/evaluation-plan.md) |
+| [Evaluation](docs/evaluation.md) | Verdicts, metrics, comparison results and the [plan](docs/evaluation-plan.md) |
 | [Technical note](docs/technical-note.md) | Short summary of the approach and its limits |
 | [Glossary](docs/glossary.md) | Terms used across the docs |
 | [Scope](docs/requirements.md) | What the MVP does and does not do |
@@ -140,7 +138,7 @@ Design
 
 Evaluation
 
-- [Chen et al., 2021, Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374): the pass@k metric and its unbiased estimator
+- [Chen et al., 2021, Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374): the unbiased pass@k estimator
 - [Yao et al., 2024, tau-bench](https://arxiv.org/abs/2406.12045): the pass^k reliability metric and its estimator
 - [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents): pass@k versus pass^k, and grading the output rather than the path
 

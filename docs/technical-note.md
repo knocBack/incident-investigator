@@ -22,7 +22,7 @@ The console connects reports to frozen evidence, automatic grades, human rubric 
 
 ## Evaluation and remaining work
 
-Scripted tests validate execution and recovery without paid calls. They are not diagnostic measurements. The retained early exploratory re-grade spans changing configurations and cannot establish current accuracy. The accepted evaluation protocol specifies paired incidents, reliability variants and matched system conditions. The baseline and expanded fixtures are a separate change; benchmark results and a comparison report follow later.
+Scripted tests validate execution and recovery without paid calls. They are not diagnostic measurements. The retained early exploratory re-grade spans changing configurations and cannot establish current accuracy. The accepted evaluation protocol specifies paired incidents, reliability variants and matched system conditions. The baseline and paired fixtures now exist. One exploratory comparison with n = 1 per cell is in [evaluation](evaluation.md#multi-agent-vs-single-agent-results); it does not establish which system is better.
 
 Future telemetry and storage adapters can reuse narrow interfaces, in the ports-and-adapters style [4]. Production access control, alert integration and automated remediation are outside this local MVP. The immediate next evidence needed is the matched quality, cost and latency comparison, including failures and human semantic review.
 

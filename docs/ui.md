@@ -1,10 +1,10 @@
 # Evaluation console guide
 
-The console launches local CLI jobs and connects their outputs: reports, frozen evidence, automatic grades, human review and suite metrics. Every run writes its own trace. The Phoenix stack is optional: a separate viewer for model and tool spans. No frontend build or account is required.
+The console launches local CLI jobs and links their outputs: reports, frozen evidence, automatic grades, human review and suite comparisons. Every run writes its own trace. The Phoenix stack is optional: a separate viewer for model and tool spans. No frontend build or account is needed.
 
-The steps and five screenshots below were verified in a browser against a fresh workspace on 2026-10-20, using scripted runs without a provider key. They show behavior, not diagnostic accuracy. The primary suite used bad configuration and database contention, two repeats each, concurrency two and a zero budget. A separate scripted run verified Phoenix export and its trace link.
+The screenshots were taken on 2026-10-21 at this head. Launch, job and cancel screens come from scripted runs with no provider key. Results screens show the retained DeepSeek V3.2 suite described in [evaluation](evaluation.md#multi-agent-vs-single-agent-results). No provider calls were made for this guide.
 
-## Start without Phoenix
+## Start the console
 
 From the repository root, with `uv` and Python 3.13:
 
@@ -13,17 +13,17 @@ uv sync --locked
 uv run incident-investigator console
 ```
 
-Open **http://127.0.0.1:8765**. Output defaults to the gitignored `var/` workspace. Use `II_HOME` consistently to select another workspace; `--port` changes the console port:
+Open **http://127.0.0.1:8765**. Output goes to the gitignored `var/` workspace. `II_HOME` selects another workspace and `--port` another port:
 
 ```sh
 II_HOME=/tmp/ii-console uv run incident-investigator console --port 8766
 ```
 
-Open **http://127.0.0.1:8766** for that command. New runs under the selected workspace are discovered automatically. Existing external roots can be indexed through the CLI `import` command; they remain read-only. New jobs, grades and rubric sidecars stay in the workspace.
+Open **http://127.0.0.1:8766** for that command. New runs in the workspace appear automatically. The CLI `import` command indexes older artifact roots read-only.
 
 ## Start with Phoenix
 
-Install the trace-export extra, then start a separate local Phoenix server in one terminal:
+Install the trace-export extra, then start a local Phoenix server in one terminal:
 
 ```sh
 uv sync --locked --extra phoenix
@@ -31,115 +31,182 @@ PHOENIX_HOST=127.0.0.1 PHOENIX_PORT=6006 PHOENIX_WORKING_DIR=/tmp/ii-phoenix \
   uv tool run --from arize-phoenix phoenix serve
 ```
 
-Open **http://127.0.0.1:6006** to confirm it is ready. The tool command installs the separate viewer; the project extra installs the exporter. In another terminal:
+Phoenix also listens for gRPC on port 4317. If that port is taken, start-up fails with `Failed to bind to address [::]:4317`. Pick a free port:
+
+```sh
+PHOENIX_HOST=127.0.0.1 PHOENIX_PORT=6006 PHOENIX_GRPC_PORT=4417 PHOENIX_WORKING_DIR=/tmp/ii-phoenix \
+  uv tool run --from arize-phoenix phoenix serve
+```
+
+Open **http://127.0.0.1:6006** to confirm it is ready. In another terminal:
 
 ```sh
 II_PHOENIX_URL=http://127.0.0.1:6006 uv run --extra phoenix incident-investigator console
 ```
 
-Check **Capture in local Phoenix** when launching a job. This adds `--trace phoenix` to the child command. To capture a CLI demo directly:
+When Phoenix is reachable, **Capture in local Phoenix** is ticked by default, including for scripted runs. It adds `--trace phoenix` to the job command. To capture a CLI demo directly:
 
 ```sh
 uv run --extra phoenix incident-investigator demo --model scripted \
   --script tests/scripted-demo.json --trace phoenix
 ```
 
-Use `uv run --extra phoenix` while exporting to Phoenix; a normal dependency sync can remove optional packages. `II_PHOENIX=1` also enables Phoenix export for an invocation and its children. Only unauthenticated loopback HTTP endpoints are accepted. Phoenix export does not enable provider calls: scripted runs still use canned actions.
+Keep `--extra phoenix` on every `uv run` while exporting; a plain sync removes optional packages. Only unauthenticated loopback endpoints are accepted. Capture never enables provider calls.
 
 ## Run evaluation
 
-Choose **Run evaluation** in the sidebar.
+![Run form with three cases, both systems and the computed job limit](assets/ui-run-form.png)
 
-1. Leave the command as `eval-suite`, which investigates and grades fresh attempts. Select **bad_configuration** and **database_contention**.
-2. Leave Provider as **scripted**, Graph as **staged**, Limits profile as **demo** and Budget cap USD as **0**. Set Repeats to **2** and Concurrency to **2**. Leave provider confirmation unchecked.
-3. Leave Phoenix capture unchecked for the first suite. Choose **Update command** and review the generated command.
-4. Choose **Launch**. The job page streams subprocess output. Wait for **completed**, then follow a run link or return to **Runs & suites**.
+*Choose cases on the left; the command preview and job limit update on the right.*
 
-The command choices have distinct purposes:
-
-| Command | Use |
+| Field | What it does |
 | --- | --- |
-| `eval-suite` | Fresh independent lab investigations and automatic grades |
-| `demo` | One injected fault, one repeat, scripted only in the console |
-| `eval` | Grade an indexed saved run without another investigation |
+| Command | `eval-suite` investigates and grades fresh attempts; `demo` runs one lab injection; `eval` grades a saved run |
+| Set | `primary` (ten incidents), `variants` (R1 and R2) or `all` |
+| Cases | The form opens with `bad_configuration` ticked. Tick cases to narrow the set, or untick all to run the whole set |
+| Provider | `scripted` replays canned actions; `openrouter` calls a real model |
+| System | `multi` (six roles), `single` (one investigator) or both on the same snapshots and limits |
+| Limits profile | `demo` for local replays; `demo-live` gives live providers more time |
+| Repeats, Concurrency | Attempts per case and system, and how many run at once |
+| Suite cap USD | Spend cap shared by all attempts. 0 allows no paid calls |
+| Per-run cap USD | Cap for each attempt within the suite cap. Blank inherits the suite cap |
+| Per-call timeout, Run wall limit | Overrides for the profile; blank uses the profile value |
+| Max input tokens | Prompts above this size are refused before sending |
 
-The provider model field is used for OpenRouter, which requires a complete model ID, a server-side `OPENROUTER_API_KEY` and the explicit provider-call confirmation checkbox. Use `eval-suite` for provider calls so the shared monetary guard applies. Live providers usually need the `demo-live` profile. These provider steps were not executed during verification.
+![Bound the run: system, caps and the minimum-cap hint](assets/ui-run-bound.png)
 
-One console job can run at a time; its batch concurrency is configurable. Closing the browser does not stop it. Console shutdown stops its child process. Jobs have a one-hour timeout and a two-megabyte output log cap; individual investigations keep their own smaller execution limits. Failed attempts remain inspectable.
+*Section 02 with OpenRouter selected. The hint under the fields gives the minimum cap.*
+
+The command preview updates as you change fields. **Launch** runs that command, with a fresh output directory named after the job.
+
+### Launch budget check
+
+![Launch disabled for a paid model at cap 0](assets/ui-launch-check.png)
+
+*A paid model with Suite cap 0: Launch stays disabled and says what to change.*
+
+Before an OpenRouter launch, the console reads the model's public prices and checks the caps.
+
+- **Paid model:** Launch stays disabled until Suite cap USD (and Per-run cap USD, if set) fits one initial call. The minimum is shown, for example USD 0.01. It is a starting minimum, not a run estimate: a run can need up to 40 model calls.
+- **Free model:** when public prices are zero, the hint reads "Free model: public prices are zero; no charge is reserved." Launch works at cap 0.
+- **Authorization:** every OpenRouter launch, free or paid, needs **I explicitly authorize OpenRouter calls** ticked.
+- **Key:** `OPENROUTER_API_KEY` must be set in the console's own environment. The browser never sees it.
+
+The **Go to** buttons jump to the field that blocks the launch. Calls stop when the next reservation no longer fits the cap. See [evaluation](evaluation.md#cost-and-budget-interpretation) for how reserves settle.
+
+### Job limit
+
+The form shows the job limit before launch. It is computed, not fixed:
+
+`ceil(attempts / concurrency) x run wall limit`, plus the larger of 60 seconds or 10%.
+
+After the limit, or after Cancel, the job gets up to 120 seconds to finalize before a forced stop. For example, 12 attempts at concurrency 2 with the 240-second `demo` wall limit give 1,584 seconds. The output log is capped at two megabytes.
+
+## Watch a job
+
+![Running job with Cancel, comparison link, report links and Phoenix links](assets/ui-job.png)
+
+*A running job: each finished or running attempt gets a row as soon as it exists.*
+
+- **Live progress:** each run row shows its system, status, verdict and admitted calls. A running row shows the current stage, for example "gathering; 9 model / 18 tool calls admitted".
+- **Open comparison** opens the suite page when both systems ran. With one system it reads **Open results**.
+- **Open report** opens a run. **Phoenix · live detailed view** opens its trace while the run is still going.
+- The banner names failures in plain words, for example "1 of 2 runs failed: single: output truncated".
+
+One console job runs at a time. Closing the browser does not stop it; console shutdown does.
+
+### Cancel
+
+**Cancel job** asks: "Cancel this job? Running attempts will stop and no new attempts will start. Results so far will be kept. Spend already incurred still applies; spend records will be finalized where available."
+
+![Cancelled job with retained reports and planned-versus-ran counts](assets/ui-job-cancelled.png)
+
+*After Cancel: reports so far are kept, and the job says how many planned attempts ran.*
+
+The interrupted attempt shows **cancelled in flight**. Attempts that never started are logged as "suite cancelled before admission". The suite page shows "Cancelled by user" and how many planned attempts never started.
 
 ## Runs and suites
 
-![Runs and suites from the scripted evaluation](assets/ui-runs.png)
+![Landing page with the retained DeepSeek suite](assets/ui-runs.png)
 
-The landing page lists observed attempts and suite links. Filter by fault, model, recorded graph, verdict or suite; sort by creation time, cost, wall time or verdict. The summary cards cover the workspace, while filters select table rows. A retained run without a result is labeled unfinished, rather than assumed to still be running.
+*All attempts, with workspace totals above and filters below.*
 
-Execution status and diagnostic verdict are separate. A **completed / inconclusive** row means execution finished but the report did not identify a cause. That is the expected scripted result. A **completed / ungraded** row has not yet been automatically evaluated.
+Filter by Incident, Model, System, Set, Verdict or Suite. Sort by creation time, cost, wall time or verdict. The cards count the whole workspace; filters only select table rows. A retained run without a result is labeled unfinished.
 
-## Run detail and Report
+Execution status and verdict are separate. **completed / inconclusive** means the run finished but named no supported cause. That is the expected scripted result.
 
-![Report from one scripted bad-configuration attempt](assets/ui-report.png)
+## Suite comparison
 
-Open a fault name to see its run detail.
+![Suite header and system summary for the DeepSeek suite](assets/ui-suite.png)
 
-Citation IDs open retrieved observations or tool receipts. A receipt describes what retrieval returned; it cannot establish an application cause by itself. Expand **Raw result.json** for the retained structured state. The stock replay deliberately supplies no diagnosis or factual report claims, so several sections are empty.
+*The header says how many planned attempts ran and what they cost. The system summary gives one plain sentence per incident.*
 
-## Frozen evidence
+The **System summary** compares multi and single per incident. When one side did not finish, it says so and calls the pair "not a like-for-like comparison". When neither is correct, it lists resource differences instead of naming a winner.
 
-![Frozen input and retrieved observation links](assets/ui-evidence.png)
+The system table below it has one row per system:
 
-This tab shows the complete retained input, including records the agent never retrieved. Filter by source, service and start/end timestamps with explicit UTC offsets. For example, select **checkout**, choose **Filter**, then expand an **Open source observation** row. A linked evidence ID opens the retrieved record; a plain source record ID identifies an input the run did not retrieve.
-
-The table displays up to 1,000 matching records. The matching count can exceed the visible rows. Older imported runs without full snapshots explicitly show retrieved evidence only; that view does not reconstruct missing input.
-
-## Grade and Grade this run
-
-![Automatic checks beside evaluator-only expectations](assets/ui-grade.png)
-
-Expand **Full grade checks and usage** for grounding, citations, process checks and resource totals. The expected answer is evaluator-only and never enters investigator prompts, source snapshots or model spans.
-
-To grade or regrade a saved run, choose **Grade this run**. The launch panel selects `eval` and the saved run. Leave faults unchecked to use its expectation pointer, or select exactly one known fault to override that pointer. Review the command and launch. This invokes the real offline grader and writes a separate grading suite; it does not make model calls or modify the original run. Return to the run's Grade tab after completion.
-
-On **Rubric**, record a score and reason for Diagnosis, Support, Contradictions, Uncertainty and Actions, then choose **Save human rubric**. Unreviewed dimensions can stay unreviewed. Notes are stored as workspace sidecars, including for imported runs. They do not overwrite the automatic verdict or affect later investigator inputs.
-
-## Suite detail and comparison
-
-![Suite metrics with requested k clamped to two observed attempts](assets/ui-suite.png)
-
-Open a suite link to see metrics grouped by fault, model and recorded workflow. Change **k** and choose **Update**. The example has two attempts per fault, so requested k=4 becomes effective k=2. Expand **Recorded batch settings** before interpreting a result.
-
-Choose **Compare** in the sidebar, select **suites**, choose Left and Right, then choose **Compare**. The table shows observed runs, correct verdicts, execution failures, calls, events, total cost and summed run wall seconds. It does not compute paired statistical significance or align incidents automatically. Suite wall seconds are summed work, not the elapsed duration of concurrent batch execution. Select **runs** to compare verdict, execution status, model, graph and resources for two individual attempts.
-
-## What the metrics mean
-
-| Display | Meaning |
+| Column | Meaning |
 | --- | --- |
-| Observed attempts / n | Retained attempts in the workspace or selected suite/group |
-| Automatic correct / correct | Attempts that pass culprit, mechanism and cited-key-evidence checks |
-| Execution failures / failures | Runs with failed or resource-exhausted execution status; different from wrong diagnoses |
-| pass@1, pass@k, pass^k | Repeat-based success estimates; see [evaluation](evaluation.md#repeats-and-reliability-metrics) |
-| Effective k | Requested k clamped to observed group size |
-| Calls | Admitted model and tool attempts, including retries |
-| Trace events / events | Local event records, including validation and transitions |
-| Tokens in/out | Available input/output token usage; absent measurements remain unknown |
-| Wall | Run elapsed time; suite comparison sums run times |
-| Grounding/citation fractions | Provenance checks over hypotheses/references, not semantic entailment |
+| Outcome / why | Each attempt's verdict and a short reason, for example "stopped during single; output truncated" |
+| Execution failures | Runs that stopped without completing reporting. Cancelled attempts are counted separately |
+| Cancelled in flight | Attempts interrupted by Cancel |
+| Model-call errors | Failed model requests, including retries and failures followed by a partial report |
+| Diagnostic rate / pass@1 | Correct attempts divided by retained attempts |
+| Mean pass@k / pass^k | Means across incidents, with k capped per incident |
+| Grounding | Mean grounding with (measured/total) attempts; see [evaluation](evaluation.md#grounding) |
 
-Failures and missing reports remain in observed denominators. Skipped or unstarted trials are recorded in batch settings rather than manufactured as observed attempts. The [evaluation guide](evaluation.md) gives exact pass estimators, verdict definitions and other raw grade measurements.
+![Per-incident cards for multi and single](assets/ui-suite-pairs.png)
+
+*Multi vs single, per incident: verdicts, grounding, failures, cost, tokens, calls and wall time side by side.*
+
+**Primary accuracy** lists verdicts per incident and system. **Reliability** fills in for the `variants` or `all` sets: R1 exercised / recovered and R2 justified uncertainty. Change **k** and choose **Update** to recompute pass@k and pass^k. Expand **Recorded batch settings** before interpreting a result.
+
+**What do the verdicts mean?** opens a short legend on the job and suite pages. Full definitions are in [evaluation](evaluation.md#automatic-verdicts).
+
+## Run detail
+
+![Report for the case-06 single attempt](assets/ui-report.png)
+
+*Report tab: execution, report and diagnosis status, then the summary, ranked hypotheses and cited evidence.*
+
+The header links **Phoenix · live detailed view**, **Grade this run** and **Watch job**. Citation IDs open the retrieved observation or tool receipt. A receipt shows what retrieval returned; it cannot establish a cause by itself. **Open result.json** shows the retained structured state.
+
+### Frozen evidence
+
+![Frozen input with source and time filters](assets/ui-evidence.png)
+
+*The complete frozen input, including records the run never retrieved.*
+
+Filter by source, service and start/end time with explicit UTC offsets. A linked evidence ID is a record the run retrieved; a plain record ID is one it did not. The table shows up to 1,000 matching records. Older imported runs without a full snapshot show retrieved evidence only.
+
+### Grade and Grade this run
+
+![Automatic checks beside the evaluator-only expected answer](assets/ui-grade.png)
+
+*Grade tab: a one-line reason for the verdict, each check, and the expected answer.*
+
+The expected answer is evaluator-only. It never enters prompts, source snapshots or model spans. Expand **Full grade checks and usage** for grounding, citations and resource totals.
+
+**Grade this run** opens the launch form with `eval` and the saved run selected. Leave cases unticked to use the run's own expectation, or tick one to override it. This runs the offline grader into a new grading suite. It makes no model calls and does not change the run.
+
+### Rubric
+
+Record a score and reason for Diagnosis, Support, Contradictions, Uncertainty and Actions, then choose **Save human rubric**. Notes are workspace sidecars. They never overwrite the automatic verdict or reach investigator inputs.
+
+## Compare
+
+Choose **Compare** in the sidebar. Select **suites** or **runs**, pick Left and Right, then choose **Compare**. The suite view shows runs, correct verdicts, execution failures, calls, events, cost and summed wall seconds. It does not compute statistical significance. For multi vs single on the same incidents, use the suite comparison page instead.
 
 ## Known and unknown cost
 
-A numeric USD value means the corresponding recorded cost is complete. **unknown** means at least one required component is absent. A suite total stays unknown when any included run lacks a cost. The raw result and grade retain known subtotals separately; a known subtotal is not the total bill.
-
-Scripted runs make no provider calls, but their adapter reports no token/cost usage. The screenshots therefore show unknown. This is expected. Provider timeouts or missing usage can likewise leave cost unknown while the budget guard retains conservative reserves. The budget cap and a displayed recorded cost answer different questions: admission capacity versus available billing evidence.
+A USD value means the recorded cost is complete. **unknown** means at least one component is missing, and a suite total stays unknown if any run lacks a cost. Known subtotals stay in the raw JSON; they are not the total bill. Zero-price models show "free model, no charge". Scripted runs show "scripted replay, no charge".
 
 ## Phoenix links
 
-After a traced run starts, its header and run-list row can link to a Phoenix session or trace. Open **Open in Phoenix** to inspect role/model/tool spans, inputs, outputs, timing and available usage. An early session link can become a direct trace link after ingestion. Refresh if the local collector is still ingesting.
-
-**Phoenix · not captured** means no usable pointer was retained. The console and local artifacts still work. Collector unavailability can prevent trace lookup even if export was enabled; it does not create missing billing measurements or replace SQLite recovery. The verification run opened its saved direct trace link and confirmed the investigation and worker spans in the separate viewer.
+A traced run links its trace from the job page, the run header and the run list. An early session link can become a direct trace link after ingestion; refresh if Phoenix is still ingesting. **Phoenix · not captured** means no trace pointer was kept. The console and local artifacts still work without Phoenix.
 
 ## Limitations
 
-The console is a loopback utility with no account or production access control. Keep it local. POSTs require the console token and same-origin requests. The in-memory storage backend supports viewing/review but disables subprocess launching by default.
+The console is a loopback utility with no account or access control. Keep it local. POSTs need the console token and a same-origin request. The in-memory storage backend supports viewing and review but disables launching.
 
-Automatic correctness is lexical and citation-based. Human review is required for causal support, contradictions and useful actions. Synthetic, development-exposed incidents and small repeat counts cannot establish production accuracy, calibrated confidence or multi-agent superiority. The matched benchmark remains pending. A scripted suite validates the UI and execution path, not those quality claims.
+Automatic correctness is lexical and citation-based. Human review is still needed for causal support, contradictions and useful actions. A scripted suite tests the console and execution path, not diagnostic quality.
