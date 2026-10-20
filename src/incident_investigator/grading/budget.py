@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping
+from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
 from incident_investigator.models import ModelCallError
+from incident_investigator.models.adapter import ModelUsage
 from incident_investigator.models.openrouter import _role
 
 D = Decimal
@@ -135,6 +138,23 @@ def price_bound(info, *, max_input_tokens=64000, output_tokens=4096):
     return (prompt_tokens * prompt + amount(output_tokens) * completion) * D("1.10")
 
 
+def estimated_input_tokens(request):
+    """Estimate the rendered request once, including schema and message framing.
+
+    ASCII text/JSON uses three characters per token, with extra framing allowance;
+    non-ASCII retains a byte allowance. This is an estimate, not a model tokenizer.
+    Real billed usage settles each reservation; an overrun fences subsequent calls.
+    """
+    rendered = {
+        "messages": request["messages"],
+        "response_format": request.get("response_format", {}),
+    }
+    text = json.dumps(rendered, ensure_ascii=False, separators=(",", ":"))
+    ascii_chars = sum(ord(char) < 128 for char in text)
+    other_bytes = sum(len(char.encode("utf-8")) for char in text if ord(char) >= 128)
+    return math.ceil(ascii_chars / 3) + other_bytes + 16 * len(request["messages"]) + 64
+
+
 class RunSpendGuard(SpendGuard):
     """Require both a run allowance and the shared suite allowance before dispatch."""
 
@@ -189,17 +209,12 @@ class BoundedModel:
         model = self.model_for_role(_role(messages))
         # Build locally first: this includes the adapter's fallback instruction and
         # lets the guard refuse an oversize prompt before any provider request.
-        preview = self._build_request(messages, schema, model, structured=False)
-        prompt_bytes = len(
-            json.dumps(
-                {"messages": preview["messages"], "schema": schema},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-        # Byte count bounds text tokenization without assuming a particular model's
-        # tokenizer. Allow framing overhead per message; include both schema modes.
-        prompt_tokens = prompt_bytes + 32 * len(preview["messages"]) + 256
+        info = self.catalog[model]
+        structured = "structured_outputs" in info.get(
+            "supported_parameters", []
+        ) and model not in getattr(self.adapter, "_schema_rejected", set())
+        preview = self._build_request(messages, schema, model, structured=structured)
+        prompt_tokens = estimated_input_tokens(preview)
         if prompt_tokens > self.max_input_tokens:
             raise ModelCallError(
                 "suite input token limit refused call", retryable=False, before_send=True
@@ -215,7 +230,11 @@ class BoundedModel:
         try:
             result = await self.adapter.complete(messages, schema)
         except ModelCallError as exc:
-            if exc.before_response or (exc.status is not None and 400 <= exc.status < 600):
+            if (
+                exc.before_send
+                or exc.before_response
+                or (exc.status is not None and 400 <= exc.status < 600)
+            ):
                 await self.guard.release(ident)
             else:
                 await self.guard.finish(ident, None)
@@ -244,4 +263,11 @@ class BoundedModel:
             if ident in self.guard.active:
                 await self.guard.finish(ident, None)
             raise
+        if (
+            cost is not None
+            and source in {"response", "generation"}
+            and (result.usage is None or result.usage.cost is None)
+        ):
+            usage = result.usage or ModelUsage()
+            result = replace(result, usage=replace(usage, cost=float(cost)))
         return result

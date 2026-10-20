@@ -54,6 +54,7 @@ async def demo(args) -> Path:
             model(args),
             args.out,
             limits=profile(args),
+            _run_id=getattr(args, "_run_id", None),
             graph="single"
             if getattr(args, "system", "multi") == "single"
             else getattr(args, "graph", DEFAULT_GRAPH),

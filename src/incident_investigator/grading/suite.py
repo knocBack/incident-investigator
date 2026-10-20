@@ -72,7 +72,16 @@ def _fault_metrics(items, k):
             "verdicts": dict(Counter(g["verdict"] for g in group)),
             "resources": {
                 field: measured_sum(g["resources"]["totals"].get(field) for g in group)
-                for field in ("model_calls", "tool_calls", "input_tokens", "output_tokens", "cost")
+                for field in (
+                    "model_calls",
+                    "tool_calls",
+                    "input_tokens",
+                    "output_tokens",
+                    "cost",
+                    "known_input_tokens",
+                    "known_output_tokens",
+                    "known_cost",
+                )
             },
             "wall_seconds": measured_sum(g["resources"]["wall_seconds"] for g in group),
             "pass_at_k": pass_at_k,
@@ -119,6 +128,9 @@ def leaderboard(grades, out, skipped=(), k=4):
                 if measured_sum(ground) is not None
                 else None,
                 "mean_cost": mean("cost"),
+                "mean_known_cost": mean("known_cost"),
+                "mean_known_input_tokens": mean("known_input_tokens"),
+                "mean_known_output_tokens": mean("known_output_tokens"),
                 "mean_input_tokens": mean("input_tokens"),
                 "mean_output_tokens": mean("output_tokens"),
                 "mean_model_calls": mean("model_calls"),
@@ -152,6 +164,9 @@ def leaderboard(grades, out, skipped=(), k=4):
             else str(value)
         )
 
+    def usage_display(total, known):
+        return display(total) if total is not None else f"unknown (known {display(known)})"
+
     lines = [
         "# Exploratory evaluation",
         "",
@@ -163,7 +178,7 @@ def leaderboard(grades, out, skipped=(), k=4):
     for r in rows:
         models = ", ".join(sorted(set(r["models"].values()))) or "unknown"
         lines.append(
-            f"| {r['system']} | {r['graph']} | {r['suite_kind']} | {models} | {r['runs']} | {display(r['accuracy'])} | {display(r['mean_grounding'])} | {display(r['mean_model_calls'])}/{display(r['mean_tool_calls'])} | {display(r['mean_input_tokens'])}/{display(r['mean_output_tokens'])} | {display(r['mean_cost'])} | {display(r['mean_wall_seconds'])} |"
+            f"| {r['system']} | {r['graph']} | {r['suite_kind']} | {models} | {r['runs']} | {display(r['accuracy'])} | {display(r['mean_grounding'])} | {display(r['mean_model_calls'])}/{display(r['mean_tool_calls'])} | {usage_display(r['mean_input_tokens'], r['mean_known_input_tokens'])}/{usage_display(r['mean_output_tokens'], r['mean_known_output_tokens'])} | {usage_display(r['mean_cost'], r['mean_known_cost'])} | {display(r['mean_wall_seconds'])} |"
         )
     lines.extend(
         [
@@ -181,7 +196,7 @@ def leaderboard(grades, out, skipped=(), k=4):
         for incident, metric in r["faults"].items():
             resource = metric["resources"]
             lines.append(
-                f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {display(resource['input_tokens'])}/{display(resource['output_tokens'])} | {display(resource['cost'])} | {display(metric['wall_seconds'])} |"
+                f"| {incident} | {r['suite_kind']} | {r['system']} | {models} | {metric['n']} | {metric['verdicts']} | {display(metric['pass_at_1'])} | {metric['k']} | {display(metric['pass_at_k'])} | {display(metric['pass_to_k'])} | {display(metric['grounding'])} | {display(resource['model_calls'])}/{display(resource['tool_calls'])} | {usage_display(resource['input_tokens'], resource['known_input_tokens'])}/{usage_display(resource['output_tokens'], resource['known_output_tokens'])} | {usage_display(resource['cost'], resource['known_cost'])} | {display(metric['wall_seconds'])} |"
             )
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
@@ -365,6 +380,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                         )
                     print(f"Starting {fault} | model {model_id} | repeat {repeat + 1}", flush=True)
                     started = time.monotonic()
+                    run_id = str(uuid4())
                     try:
                         directory = await (demo_fn or cli.demo)(
                             argparse.Namespace(
@@ -377,11 +393,12 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                 limits_profile=getattr(args, "limits_profile", None),
                                 system=system,
                                 _snapshot=snapshots.get(fault),
+                                _run_id=run_id,
                             )
                         )
-                    except Exception as exc:
-                        directory = out / str(uuid4())
-                        directory.mkdir()
+                    except (Exception, asyncio.CancelledError) as exc:
+                        directory = out / run_id
+                        directory.mkdir(exist_ok=True)
                         save(
                             directory / "attempt-error.json",
                             {
@@ -424,7 +441,30 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     print(f"{g['verdict']} | {directory / 'report.md'}", flush=True)
                     return g
 
-            grades.extend(await asyncio.gather(*(run_job(*job) for job in jobs)))
+            tasks = [asyncio.create_task(run_job(*job)) for job in jobs]
+            try:
+                grades.extend(await asyncio.gather(*tasks))
+            except asyncio.CancelledError:
+                for task in tasks:
+                    if not task.done() and not task.cancelling():
+                        task.cancel()
+                settled = await asyncio.gather(*tasks, return_exceptions=True)
+                grades.extend(value for value in settled if isinstance(value, dict))
+                for job, value in zip(jobs, settled, strict=True):
+                    if not isinstance(value, dict):
+                        model_id, repeat, fault, system = job
+                        batch["skipped"].append(
+                            {
+                                "model": model_id,
+                                "repeat": repeat,
+                                "fault": fault,
+                                "system": system,
+                                "reason": "suite cancelled before admission",
+                            }
+                        )
+                save(out / "batch.json", batch)
+                leaderboard(grades, out, batch["skipped"], getattr(args, "k", 4))
+                raise
             if guard:
                 guard.observe(await key_usage(client))
                 save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})

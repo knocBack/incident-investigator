@@ -1007,6 +1007,7 @@ async def investigate(
     faults: dict[str, FaultSelection] | None = None,
     graph: GraphVariant = DEFAULT_GRAPH,
     resume: Path | None = None,
+    _run_id: str | None = None,
 ) -> Path:
     """Start or resume one fenced investigation under its original finite limits."""
     from langsmith import tracing_context
@@ -1017,7 +1018,7 @@ async def investigate(
     if graph not in {"staged", "single"}:
         raise ValueError(f"unknown graph: {graph}")
     out = out if out is not None else home() / "runs"
-    run_dir = Path(resume) if resume else out / identity()
+    run_dir = Path(resume) if resume else out / (_run_id or identity())
     if not resume:
         run_dir.mkdir(parents=True, exist_ok=False)
     with invocation_lock(run_dir):

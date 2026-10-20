@@ -300,3 +300,195 @@ async def test_single_total_allowance_exceeds_specialist_allowance(tmp_path):
     assert result["status"] == "completed"
     assert result["usage"]["single"]["model_calls"] == 3
     assert result["usage"]["single"]["tool_calls"] == 8
+
+
+async def test_three_run_concurrent_suite_fits_eleven_cent_budget(tmp_path):
+    """Regression: byte-as-token plus duplicate-schema reserves rejected cheap runs."""
+    from dataclasses import replace
+    from decimal import Decimal
+
+    from incident_investigator.grading.budget import (
+        BoundedModel,
+        SpendGuard,
+        estimated_input_tokens,
+    )
+    from incident_investigator.models import OpenRouterModel
+    from incident_investigator.models.adapter import ModelUsage
+
+    model_id = "deepseek/deepseek-v3.2"
+    catalog = {
+        model_id: {
+            "context_length": 163840,
+            "supported_parameters": ["structured_outputs"],
+            "pricing": {"prompt": ".00000028", "completion": ".00000042"},
+        }
+    }
+    guard = SpendGuard(0, ".11")
+
+    class UsageScript(CaseScript):
+        build_request = staticmethod(OpenRouterModel.build_request)
+
+        def model_for_role(self, role):
+            return model_id
+
+        async def complete(self, messages, schema):
+            context = json.loads(messages[1]["content"])
+            self.case = context["alert"]["case_id"]
+            response = await super().complete(messages, schema)
+            estimate = estimated_input_tokens(
+                self.build_request(messages, schema, model_id, structured=True)
+            )
+            # Billed-token double uses representative observed role sizes; it does
+            # not pretend the request estimate is an exact provider tokenizer.
+            role_tokens = {
+                "orchestrator": 700,
+                "observability": 10000,
+                "dependency": 8000,
+                "reasoning": 16000,
+                "critic": 16000,
+                "reporting": 18000,
+            }
+            tokens = min(estimate, role_tokens[context["role"]])
+            cost = float(Decimal(tokens) * Decimal(".00000028") + 512 * Decimal(".00000042"))
+            return replace(response, usage=ModelUsage(tokens, 512, cost), model=model_id)
+
+    args = Namespace(
+        faults="case-02,case-04,case-10",
+        set="primary",
+        system="multi",
+        graph="staged",
+        models=model_id,
+        model="scripted",
+        repeats=1,
+        concurrency=2,
+        budget_usd=".11",
+        out=tmp_path / "batch",
+        max_input_tokens=180000,
+        k=1,
+    )
+    board = await run_suite(
+        args,
+        model_factory=lambda _: BoundedModel(
+            UsageScript("case-02"), catalog, guard, max_input_tokens=180000
+        ),
+    )
+    assert [g["verdict"] for g in board["runs"]] == ["correct"] * 3
+    assert guard.charged() < Decimal(".11")
+    assert guard.unknown == 0
+    assert all(g["resources"]["totals"]["input_tokens"] > 0 for g in board["runs"])
+    assert all(g["resources"]["totals"]["cost"] > 0 for g in board["runs"])
+
+
+async def test_unbilled_admission_refusal_preserves_completed_usage(tmp_path):
+    from dataclasses import replace
+
+    from incident_investigator.models import ModelCallError
+    from incident_investigator.models.adapter import ModelUsage
+
+    class RefuseAfterCall(CaseScript):
+        async def complete(self, messages, schema):
+            if self.requests:
+                raise ModelCallError(
+                    "local reservation refused", retryable=False, before_response=True
+                )
+            response = await super().complete(messages, schema)
+            return replace(response, usage=ModelUsage(123, 45, 0.001))
+
+    source = tmp_path / "source"
+    source.mkdir()
+    await freeze_case("case-04", source)
+    directory = await investigate(
+        load_snapshot("case-04", source),
+        RefuseAfterCall("case-04"),
+        tmp_path / "runs",
+        graph="single",
+    )
+    result = json.loads((directory / "result.json").read_text())
+    assert result["usage"]["single"]["input_tokens"] == 123
+    assert result["usage"]["single"]["output_tokens"] == 45
+    assert result["usage"]["single"]["cost"] == 0.001
+
+
+async def test_recovered_generation_cost_reaches_result():
+    from incident_investigator.grading.budget import BoundedModel, SpendGuard
+    from incident_investigator.models import OpenRouterModel
+    from incident_investigator.models.adapter import ModelResult, ModelUsage
+
+    class Adapter:
+        build_request = staticmethod(OpenRouterModel.build_request)
+
+        def model_for_role(self, role):
+            return "test/model"
+
+        async def complete(self, messages, schema):
+            return ModelResult({}, ModelUsage(10, 5, None), 0, "generation", "test/model")
+
+        async def generation_cost(self, identity):
+            return 0.00001
+
+    bounded = BoundedModel(
+        Adapter(),
+        {
+            "test/model": {
+                "context_length": 100000,
+                "pricing": {"prompt": ".000001", "completion": ".000001"},
+            }
+        },
+        SpendGuard(0, 1),
+    )
+    response = await bounded.complete([], {})
+    assert response.usage == ModelUsage(10, 5, 0.00001)
+
+
+async def test_cancelled_suite_retains_partial_reports_and_leaderboard(tmp_path):
+    import asyncio
+    from dataclasses import replace
+
+    from incident_investigator.models.adapter import ModelUsage
+
+    started = asyncio.Event()
+    blocked = 0
+
+    class InterruptedScript(CaseScript):
+        async def complete(self, messages, schema):
+            nonlocal blocked
+            if self.requests:
+                blocked += 1
+                if blocked == 2:
+                    started.set()
+                await asyncio.Event().wait()
+            response = await super().complete(messages, schema)
+            return replace(response, usage=ModelUsage(100, 10, 0.001))
+
+    args = Namespace(
+        faults="case-02",
+        set="primary",
+        system="both",
+        graph="staged",
+        models="scripted",
+        model="scripted",
+        repeats=1,
+        concurrency=2,
+        budget_usd="0",
+        out=tmp_path / "batch",
+        k=1,
+    )
+    task = asyncio.create_task(
+        run_suite(args, model_factory=lambda _: InterruptedScript("case-02"))
+    )
+    await asyncio.wait_for(started.wait(), 10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    board = json.loads((args.out / "leaderboard.json").read_text())
+    assert len(board["runs"]) == 2
+    assert all(g["process"]["execution_status"] == "failed" for g in board["runs"])
+    for result_path in args.out.glob("*/result.json"):
+        result = json.loads(result_path.read_text())
+        assert result["completeness"] == "partial"
+        assert "cancelled" in result["stop_reason"]
+        assert (result_path.parent / "report.md").exists()
+        assert (result_path.parent / "grade.json").exists()
+        # Previously committed paid work survives; unreceived calls stay unknown.
+        assert sum(u["known_cost"] for u in result["usage"].values()) >= 0.001
+        assert any(u["cost"] == "unknown" for u in result["usage"].values())
