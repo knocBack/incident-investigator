@@ -80,6 +80,7 @@
                                 <option data-call-seconds="{{ limits.call_seconds }}" data-wall-seconds="{{ limits.wall_seconds }}">{{ profile }}</option>
                             {% endfor %}
                             </select>
+                            <small>demo uses short timeouts for local replays; demo-live gives live providers more time. Overrides below apply to either profile.</small>
                         </label>
                         <label class="field">
                             Repeats<input name="repeats" type="number" min="1" max="20" value="1">
@@ -94,9 +95,11 @@
        max="100"
        step=".01"
        value="0">
+                            <small>Total allowance shared by all attempts in this suite. 0 means no paid calls allowed.</small>
                         </label>
                         <label class="field">
                             Per-run cap USD<input name="run_budget_usd" id="run_budget_usd" aria-describedby="reservation-estimate run-error" type="number" min="0" max="100" step=".01" placeholder="Use suite cap">
+                            <small>Maximum for each attempt within the suite allowance. Blank inherits the suite cap; 0 allows no paid calls.</small>
                         </label>
                         <label class="field">
                             Per-call timeout (seconds)<input name="call_seconds" type="number" min=".001" max="600" step="any" placeholder="{{ profiles['demo'].call_seconds }} seconds (demo)">
@@ -111,10 +114,11 @@
                     <p class="caption" id="reservation-estimate" role="status">Scripted replay makes no model calls.</p>
                     <p class="callout info" id="replay-note">Scripted is a canned pipeline replay for testing the console. It uses fixed responses; inconclusive is expected.</p>
                     <label class="fault-option">
-                        <input name="trace" type="checkbox">Capture in local Phoenix (optional extra required)
+                        <input name="trace" type="checkbox" {% if phoenix_available %}checked{% endif %}>Capture in local Phoenix (optional extra required)
                     </label>
+                    <p class="caption">{% if phoenix_available %}Local Phoenix is reachable; capture is enabled by default.{% else %}Capture needs a reachable local Phoenix and the phoenix extra installed.{% endif %}</p>
                     <label class="confirm">
-                        <input name="confirm_paid" type="checkbox">
+                        <input name="confirm_paid" id="confirm_paid" data-label="I explicitly authorize OpenRouter calls" type="checkbox">
                         <span>I explicitly authorize OpenRouter calls under this budget cap. The API key comes only from the server environment. Paid calls use eval-suite’s budget guard.</span>
                     </label>
                 </div>

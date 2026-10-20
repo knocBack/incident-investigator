@@ -66,7 +66,7 @@ if (form && form.dataset.enabled === "yes") {
       input.setAttribute("aria-invalid", "true");
       const link = document.createElement("a");
       link.href = "#" + input.id;
-      link.textContent = "Go to " + (input.labels[0]?.textContent.trim() || name);
+      link.textContent = "Go to " + (input.dataset.label || input.labels[0]?.textContent.trim().split("\n")[0] || name);
       link.className = "button small";
       link.addEventListener("click", (event) => {
         event.preventDefault();
@@ -120,9 +120,10 @@ if (form && form.dataset.enabled === "yes") {
         document.getElementById("reservation-estimate").textContent = result.estimated_call_reservation === null
           ? (form.elements.provider.value === "scripted" || form.elements.command.value === "eval" ? "This replay or saved-run grading makes no model calls." : "Reservation unavailable until prices and settings can be checked.")
           : result.reservation_guide;
-        error.textContent = result.launch_allowed ? "" : result.message;
-        blockedFields(result.blocked_fields || []);
-        launch.disabled = launching || !result.launch_allowed;
+        const authorization = result.authorization_required ? "Tick 'I explicitly authorize OpenRouter calls' in section 02 before launching, including free models." : "";
+        error.textContent = [result.launch_allowed ? "" : result.message, authorization].filter(Boolean).join(" ");
+        blockedFields([...(result.blocked_fields || []), ...(result.authorization_required ? ["confirm_paid"] : [])]);
+        launch.disabled = launching || !result.launch_allowed || result.authorization_required;
       }
     } catch (e) {
       if (version === previewVersion) {
@@ -156,6 +157,7 @@ if (form && form.dataset.enabled === "yes") {
       location.assign(result.url);
     } catch (e) {
       error.textContent = e.message;
+      if (e.message.includes("explicitly authorize OpenRouter")) blockedFields(["confirm_paid"]);
       launching = false;
       button.disabled = false;
     }
@@ -167,7 +169,7 @@ if (output) {
   const stream = new EventSource("/api/jobs/" + output.dataset.job + "/events");
   stream.onmessage = (event) => {
     const job = JSON.parse(event.data);
-    document.getElementById("job-status").textContent = job.status;
+    document.getElementById("job-status").textContent = job.heading || job.status;
     document.getElementById("job-outcome").textContent = job.outcome || "";
     document.getElementById("job-outcome").className = "callout " + (job.outcome_tone === "warning" ? "warning" : "info");
     output.replaceChildren();
@@ -190,7 +192,7 @@ if (output) {
     for (const suite of job.suites || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/suites/" + encodeURIComponent(suite.id);
-      a.textContent = "Open comparison · " + suite.name;
+      a.textContent = "Open comparison · " + (suite.title || suite.name);
       a.className = "button primary";
       p.append(a); runs.append(p);
     }
@@ -199,10 +201,13 @@ if (output) {
       a.href = "/runs/" + encodeURIComponent(run.id) + "?tab=report";
       a.textContent = ["Open report", run.fault, run.system, run.status, run.verdict].join(" · ");
       p.append(a);
+      const progress = document.createElement("small");
+      progress.textContent = run.outcome || run.progress || "Progress unavailable";
+      p.append(progress);
       if (run.phoenix_url) {
         const trace = document.createElement("a");
         trace.href = run.phoenix_url; trace.target = "_blank"; trace.rel = "noreferrer";
-        trace.textContent = "Open in Phoenix"; trace.className = "button small";
+        trace.textContent = "Phoenix · live detailed view"; trace.className = "button small";
         p.append(" ", trace);
       }
       runs.append(p);

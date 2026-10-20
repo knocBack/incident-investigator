@@ -6,7 +6,9 @@ import html
 import json
 import re
 from collections import Counter
+from contextlib import suppress
 from datetime import datetime
+from decimal import InvalidOperation
 
 from markdown_it import MarkdownIt
 from markupsafe import Markup
@@ -30,9 +32,12 @@ def failure_label(reason):
     return reason[:160] or "execution failed"
 
 
-def failure_explanation(reason):
+def failure_explanation(reason, call_seconds=None):
     if "output_truncated" in reason:
         return "The model hit its output-token limit before finishing the report. Try another model or a larger output limit where supported."
+    if "timeout" in reason.lower():
+        limit = f" ({call_seconds:g} s per call)" if isinstance(call_seconds, int | float) else ""
+        return f"The request timed out{limit}. Try another model or raise Per-call timeout within the run wall limit."
     return ""
 
 
@@ -50,9 +55,13 @@ def check_reasons(result, grade):
             "The final diagnosis is inconclusive; separately, the graded top hypothesis did not match the expected culprit service."
         )
     if not result.get("hypotheses"):
-        reasons["culprit_service"] = (
-            "No ranked hypothesis was available for the culprit-service check."
-        )
+        for key, subject in (
+            ("culprit_service", "culprit-service check"),
+            ("mechanism", "mechanism check"),
+            ("key_evidence_cited", "key-evidence check"),
+            ("required_evidence_groups", "required evidence-group check"),
+        ):
+            reasons[key] = f"No ranked hypothesis was available for the {subject}."
     return {
         key: reasons.get(
             key, "The saved evaluator check did not pass; inspect the full grade below."
@@ -60,6 +69,159 @@ def check_reasons(result, grade):
         for key, passed in grade.get("diagnosis_checks", {}).items()
         if not passed
     }
+
+
+def present_run(run, store, suite_prefix=None):
+    """Explain persisted outcomes without changing execution status or grading."""
+    if not run.get("prefix"):
+        return {
+            **run,
+            "outcome": "Retained grade only; investigation artifact unavailable.",
+            "failure_explanation": "",
+            "has_hypothesis": False,
+            "free_no_charge": False,
+            "progress": "unavailable",
+        }
+    result = store.json(run["prefix"] + "/result.json")
+    saved = store.json(run["prefix"] + "/run.json")
+    state = result.get("state", {})
+    events = store.lines(run["prefix"] + "/trace.jsonl")
+    transitions = [e for e in events if e.get("event") == "state_transition"]
+    latest = transitions[-1] if transitions else {}
+    model_calls = max(run.get("model_calls") or 0, latest.get("model_calls", 0))
+    tool_calls = max(run.get("tool_calls") or 0, latest.get("tool_calls", 0))
+    # Older live traces lack admission counts; completed calls are a lower bound.
+    model_calls = max(model_calls, sum(e.get("event") == "model_call" for e in events))
+    tool_calls = max(tool_calls, sum(e.get("event") == "tool_call" for e in events))
+    stage = state.get("stage") or latest.get("stage") or "starting"
+    seconds = (state.get("limits") or saved.get("limits") or {}).get("call_seconds")
+    reason = (
+        result.get("stop_reason")
+        or run.get("grade", {}).get("process", {}).get("stop_reason")
+        or ""
+    )
+    errors = [
+        e
+        for e in events
+        if e.get("event") == "model_call" and e.get("outcome") not in {None, "received", "ok"}
+    ]
+    task_errors = [
+        f"{t.get('role', 'role')}: {failure_label(t['failure'])}"
+        for t in state.get("tasks", {}).values()
+        if t.get("failure")
+    ]
+    hypotheses = result.get("hypotheses", [])
+    hypothesis_note = (
+        "retained a high-confidence hypothesis"
+        if any(h.get("confidence") == "high" for h in hypotheses)
+        else "retained a ranked hypothesis"
+        if hypotheses
+        else "no ranked hypothesis"
+    )
+    active = run["status"] in {"running", "unfinished"}
+    if active:
+        outcome = f"{stage}; {model_calls} model / {tool_calls} tool calls admitted"
+    else:
+        failed = run["status"] in {"failed", "resource_exhausted", "interrupted"}
+        outcome = (
+            f"stopped during {stage}"
+            if failed
+            else (
+                "partial report completed"
+                if result.get("completeness") == "partial"
+                else "report completed"
+            )
+        )
+        if reason:
+            outcome += "; " + failure_label(reason)
+        elif task_errors:
+            outcome += "; " + "; ".join(dict.fromkeys(task_errors))
+        timeout_count = sum("timeout" in str(e.get("outcome", "")).lower() for e in errors)
+        if timeout_count:
+            outcome += f"; {timeout_count} timed-out model calls"
+            if isinstance(seconds, int | float):
+                outcome += f" at {seconds:g} s per call"
+        elif errors and not reason and not task_errors:
+            outcome += f"; {len(errors)} model-call errors retained"
+        outcome += "; " + hypothesis_note
+    explanation = failure_explanation(reason, seconds)
+    if not active and run["status"] == "completed" and result.get("completeness") == "partial":
+        context = (
+            "An earlier role failed, then the reporting role produced a final partial report. "
+            if task_errors
+            else "A final partial report was delivered; its recorded closure reason appears above. "
+        )
+        explanation = (
+            context
+            + "Completed describes report delivery, not a proven diagnosis. Execution failures count runs that stopped without completing reporting. "
+            + explanation
+        )
+    free = False
+    if suite_prefix:
+        from incident_investigator.grading.budget import amount, price_bound
+
+        prices = store.json(suite_prefix + "/prices.json")
+        ledger = store.json(run["prefix"] + "/budget.json")
+        with suppress(KeyError, TypeError, ValueError, InvalidOperation):
+            free = (
+                bool(run.get("models"))
+                and all(price_bound(prices[model]) == 0 for model in set(run["models"].values()))
+                and bool(ledger)
+                and all(
+                    value is None or amount(value) == 0
+                    for value in (run.get("cost"), run.get("known_cost"))
+                )
+                and all(
+                    amount(ledger["state"][key]) == 0
+                    for key in ("charged", "active", "unknown_reserve")
+                )
+                and all(
+                    amount(c["reservation"]) == 0
+                    and (c.get("cost") in {None, "unbilled_failure"} or amount(c["cost"]) == 0)
+                    for c in ledger["calls"]
+                )
+            )
+    return {
+        **run,
+        "outcome": outcome,
+        "failure_explanation": explanation,
+        "has_hypothesis": bool(hypotheses),
+        "free_no_charge": free,
+        "progress": f"{stage} · {model_calls} model / {tool_calls} tool calls admitted",
+    }
+
+
+def comparison_outcome(metrics):
+    multi, single = metrics.get("multi"), metrics.get("single")
+    if not multi or not single:
+        return "Awaiting attempts from both systems."
+    if multi["provisional"] or single["provisional"]:
+        return "Comparison is provisional while attempts or grades are pending."
+    if multi["pass1"] != single["pass1"]:
+        winner = "Multi" if multi["pass1"] > single["pass1"] else "Single"
+        return f"{winner} achieved a higher correct-verdict rate on these retained attempts. Compare the outcomes below for causes and execution limits."
+    text = (
+        "Both systems achieved the same correct-verdict rate. "
+        if multi["correct"]
+        else "Neither system achieved a correct final verdict. "
+    )
+    mh = sum(r.get("has_hypothesis", False) for r in multi["runs"])
+    sh = sum(r.get("has_hypothesis", False) for r in single["runs"])
+    if bool(mh) != bool(sh):
+        text += f"{'Multi' if mh else 'Single'} retained a hypothesis while the other retained none; this shows diagnostic progress, not a successful investigation."
+    else:
+        text += "The recorded outcomes below explain progress and failures; no diagnostic winner was established."
+    return text
+
+
+def suite_title(suite, runs):
+    cases = suite.get("batch", {}).get("faults") or sorted({r["fault"] for r in runs})
+    model = ", ".join(sorted({r["model"] for r in runs if r.get("model")})) or "awaiting model"
+    time = min((r["created_at"] for r in runs if r.get("created")), default="time unavailable")
+    with suppress(ValueError):
+        time = datetime.fromisoformat(time).strftime("%Y-%m-%d %H:%M UTC")
+    label = cases[0] if len(cases) == 1 else f"{len(cases)} incidents"
+    return f"{label} · {model} · {time}"
 
 
 def markdown(text, run_id="", references=()):
@@ -154,6 +316,7 @@ def suite_metrics(runs, k):
                         "wall_seconds",
                     )
                 },
+                "free_no_charge": all(r.get("free_no_charge") for r in items),
                 "runs": items,
                 "n": n,
                 "correct": correct,
@@ -222,6 +385,13 @@ def system_metrics(board, runs, k):
         result.append(
             {
                 **row,
+                "outcomes": [
+                    r
+                    for r in runs
+                    if r["system"] == row["system"]
+                    and (r["case_set"] == "primary") == (row["suite_kind"] == "primary")
+                    and r["model"] == ", ".join(sorted(set(row.get("models", {}).values())))
+                ],
                 "passk": sum(p[0] for p in passes) / len(passes) if passes else None,
                 "powerk": sum(p[1] for p in passes) / len(passes) if passes else None,
             }
@@ -241,6 +411,7 @@ def summary(runs):
         "calls": sum(r["calls"] for r in runs),
         "events": sum(r["events"] for r in runs),
         "wall_seconds": total(runs, "wall_seconds"),
+        "free_no_charge": bool(runs) and all(r.get("free_no_charge") for r in runs),
     }
 
 
@@ -250,4 +421,4 @@ def paired_metrics(metrics):
         key = (row["fault"], row["model"], row["case_set"])
         pair = pairs.setdefault(key, {"fault": key[0], "model": key[1], "case_set": key[2]})
         pair[row["system"]] = row
-    return [pairs[key] for key in sorted(pairs)]
+    return [{**pairs[key], "outcome": comparison_outcome(pairs[key])} for key in sorted(pairs)]

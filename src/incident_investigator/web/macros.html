@@ -20,7 +20,7 @@
         </div>
         <div class="stat">
             <label>Total cost (USD)</label>
-            <strong>{% if s.cost is none %}unknown{% else %}{{ '%.5f'|format(s.cost) }}{% endif %}</strong>
+            <strong>{% if s.free_no_charge|default(false) %}free model, no charge{% elif s.cost is none %}unknown{% else %}{{ '%.5f'|format(s.cost) }}{% endif %}</strong>
         </div>
     </div>
 {% endmacro %}
@@ -63,7 +63,7 @@
                             {% endif %}
                         </td>
                         <td class="number">
-                            {{ measured(r.cost, r.known_cost, 6) }}
+                            {{ cost(r) }}
                             <small>{{ measured(r.input_tokens, r.known_input_tokens, 0) }} / {{ measured(r.output_tokens, r.known_output_tokens, 0) }}</small>
                         </td>
                         <td class="number">
@@ -95,7 +95,7 @@
     {% if v is number %}{{ ('%.' ~ digits ~ 'f')|format(v) }}{% else %}unknown{% if known is number %} (known {{ ('%.' ~ digits ~ 'f')|format(known) }}){% endif %}{% endif %}
 {%- endmacro %}
 {% macro resources(r) %}
-    <div class="check-row"><span>Cost USD</span><span>{{ measured(r.cost, r.known_cost, 6) }}</span></div>
+    <div class="check-row"><span>Cost</span><span>{{ cost(r) }}</span></div>
     <div class="check-row"><span>Input tokens</span><span>{{ measured(r.input_tokens, r.known_input_tokens, 0) }}</span></div>
     <div class="check-row"><span>Output tokens</span><span>{{ measured(r.output_tokens, r.known_output_tokens, 0) }}</span></div>
     <div class="check-row"><span>Model / tool calls</span><span>{{ value(r.model_calls) }} / {{ value(r.tool_calls) }}</span></div>
@@ -107,9 +107,14 @@
         <p>pass@1 {{ '%.3f'|format(row.pass1) }} · pass@k {{ '%.3f'|format(row.passk) }} · pass^k {{ '%.3f'|format(row.powerk) }} (k={{ row.k }})</p>
         <div class="check-row"><span>Grounding</span><span>{{ grounding(row.grounding, row.grounding_measured, row.n) }}</span></div>
         <div class="check-row"><span>Execution failures</span><span>{{ row.execution_failures }}</span></div>
-        {{ resources(row.resources) }}
+        {% if row.free_no_charge %}<p>free model, no charge · token usage may remain unknown</p>{% endif %}
+        {{ resources(dict(row.resources, free_no_charge=row.free_no_charge)) }}
         {% for run in row.runs %}
-            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.status }}</a></p>{% endif %}
+            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.status }}</a><small>{{ run.outcome }}</small></p>{% endif %}
         {% endfor %}
     {% else %}<p>No observed attempt.</p>{% endif %}
 {% endmacro %}
+
+{% macro cost(r) -%}
+    {% if r.free_no_charge|default(false) %}free model, no charge{% else %}USD {{ inline_measured(r.cost, r.known_cost, 6) }}{% endif %}
+{%- endmacro %}

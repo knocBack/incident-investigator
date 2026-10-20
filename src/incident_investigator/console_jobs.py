@@ -16,7 +16,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from incident_investigator.console_preflight import LaunchPreflight
-from incident_investigator.console_views import failure_explanation, failure_label
+from incident_investigator.console_views import (
+    failure_explanation,
+    failure_label,
+    present_run,
+    suite_title,
+)
 from incident_investigator.contracts import PROFILES
 from incident_investigator.graph_config import DEFAULT_GRAPH
 from incident_investigator.storage import FileEvalCatalog, Repositories
@@ -121,7 +126,9 @@ def build_command(
         raise ValueError("select distinct injectable cases within the selected set")
     if request.provider == "openrouter":
         if validate_launch and not request.confirm_paid:
-            raise ValueError("explicit paid-run confirmation required")
+            raise ValueError(
+                "Tick 'I explicitly authorize OpenRouter calls' in section 02 before launching (explicit confirmation required for all OpenRouter models)."
+            )
         if validate_launch and not os.environ.get("OPENROUTER_API_KEY"):
             raise ValueError("OPENROUTER_API_KEY is not set in the server environment")
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.:+-]+", request.model_id):
@@ -271,6 +278,15 @@ class Jobs:
             ]
             for run in metadata["runs"]:
                 run["report_path"] = run["location"].rstrip("/") + "/report.md"
+            prefixes = {s["id"]: s["prefix"] for s in metadata["suites"]}
+            metadata["runs"] = [
+                present_run(r, self.repo.artifacts, prefixes.get(r.get("suite")))
+                for r in metadata["runs"]
+            ]
+            for suite in metadata["suites"]:
+                suite["title"] = suite_title(
+                    suite, [r for r in metadata["runs"] if r.get("suite") == suite["id"]]
+                )
             metadata["replay"] = metadata.get("provider") == "scripted" or (
                 bool(metadata["runs"]) and all(r["model"] == "scripted" for r in metadata["runs"])
             )
@@ -291,11 +307,6 @@ class Jobs:
             if not reason:
                 reason = self.repo.artifacts.json(run["prefix"] + "/result.json").get("stop_reason")
             failures.append(f"{run['system']}: {failure_label(reason or '')}")
-        metadata["outcome_tone"] = (
-            "warning"
-            if failed or metadata["status"] in {"stopped", "failed", "interrupted"}
-            else "info"
-        )
         skipped, budget_stops, zero_spend = [], [], True
         for suite in metadata["suites"]:
             prefix = suite["prefix"]
@@ -361,6 +372,11 @@ class Jobs:
             "warning"
             if failed or metadata["status"] in {"stopped", "failed", "interrupted"}
             else "info"
+        )
+        metadata["heading"] = (
+            f"finished, {len(failed)} of {len(metadata['runs'])} runs failed"
+            if metadata["status"] == "completed" and failed
+            else metadata["status"]
         )
 
     async def execute(self, ident: str, argv: list[str], output: Path):

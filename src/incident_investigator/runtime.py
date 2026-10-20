@@ -883,6 +883,8 @@ class Investigation:
         self.trace(
             "state_transition",
             stage=c.stage,
+            model_calls=sum(call.kind == "model" for call in c.calls.values()),
+            tool_calls=sum(call.kind == "tool" for call in c.calls.values()),
             revision=c.revision,
             status=c.status,
             outcome=c.stop_reason or c.status,

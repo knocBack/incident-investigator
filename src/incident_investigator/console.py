@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,12 +29,13 @@ from incident_investigator.console_jobs import (
 )
 from incident_investigator.console_views import (
     check_reasons,
-    failure_explanation,
     markdown,
     observations,
     paired_metrics,
+    present_run,
     pretty,
     suite_metrics,
+    suite_title,
     summary,
     system_metrics,
 )
@@ -41,6 +43,26 @@ from incident_investigator.contracts import PROFILES
 from incident_investigator.storage import Repositories, repositories
 
 DIMENSIONS = ("Diagnosis", "Support", "Contradictions", "Uncertainty", "Actions")
+
+
+async def phoenix_available():
+    """Probe only the configured loopback collector, with no credentials or redirects."""
+    import httpx
+
+    from incident_investigator.telemetry.tracing import local_url
+
+    try:
+        from importlib.util import find_spec
+
+        if find_spec("openinference.instrumentation.langchain") is None:
+            return False
+        url = local_url(os.environ.get("II_PHOENIX_URL", "http://127.0.0.1:6006"))
+        async with httpx.AsyncClient(
+            timeout=0.5, trust_env=False, follow_redirects=False
+        ) as client:
+            return (await client.get(url)).is_success
+    except (ImportError, ValueError, httpx.HTTPError):
+        return False
 
 
 class RubricEntry(BaseModel):
@@ -116,6 +138,19 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
     def refresh():
         repo.runs.refresh()
 
+    def presented(rows):
+        suites = {s["id"]: s for s in repo.runs.suites()}
+        result = []
+        for row in rows:
+            selected = suites.get(row.get("suite"), {})
+            value = present_run(row, repo.artifacts, selected.get("prefix"))
+            if selected:
+                value["suite_name"] = suite_title(
+                    selected, repo.runs.runs({"suite": selected["id"]})
+                )
+            result.append(value)
+        return result
+
     def get_run(ident):
         run = repo.runs.get(ident)
         if run is None:
@@ -132,7 +167,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             k: request.query_params.get(k, "")
             for k in ("fault", "model", "system", "case_set", "verdict", "suite")
         }
-        rows = repo.runs.runs(filters, request.query_params.get("sort", "created"))
+        rows = presented(repo.runs.runs(filters, request.query_params.get("sort", "created")))
         options = {k: sorted({r[k] for r in repo.runs.runs() if r[k]}) for k in filters}
         options["suite"] = sorted(s["id"] for s in repo.runs.suites())
         return render(
@@ -141,14 +176,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             runs=rows,
             filters=filters,
             options=options,
-            suites=repo.runs.suites(),
-            stats=summary(repo.runs.runs()),
+            suites=[
+                {**s, "title": suite_title(s, repo.runs.runs({"suite": s["id"]}))}
+                for s in repo.runs.suites()
+            ],
+            stats=summary(presented(repo.runs.runs())),
         )
 
     @app.get("/runs/{ident}", response_class=HTMLResponse)
     def run_detail(request: Request, ident: str, tab: str = "report"):
         refresh()
-        run = get_run(ident)
+        run = presented([get_run(ident)])[0]
         if tab not in {"report", "grade", "rubric", "evidence"}:
             raise HTTPException(404, "Unknown tab")
         result = artifact(run, "result.json")
@@ -204,11 +242,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             grade=run["grade"],
             expected=repo.catalog.expected(run["fault"]),
             check_reasons=check_reasons(result, run["grade"]),
-            failure_explanation=failure_explanation(
-                result.get("stop_reason")
-                or run["grade"].get("process", {}).get("stop_reason")
-                or ""
-            ),
+            failure_explanation=run["failure_explanation"],
             run_profile=profile_name,
             review=review,
             telemetry=observations(rows, request.query_params),
@@ -216,6 +250,15 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             snapshot=artifact(run, "snapshot/manifest.json"),
             trace=trace,
         )
+
+    @app.get("/runs/{ident}/result.json")
+    def raw_result(ident: str):
+        refresh()
+        run = get_run(ident)
+        content = repo.artifacts.read(run["prefix"] + "/result.json")
+        if content is None:
+            raise HTTPException(404, "Result not retained yet")
+        return Response(content, media_type="application/json")
 
     @app.get("/runs/{ident}/evidence/{evidence_id}", response_class=HTMLResponse)
     def evidence(request: Request, ident: str, evidence_id: str):
@@ -247,7 +290,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         selected = next((s for s in repo.runs.suites() if s["id"] == ident), None)
         if selected is None:
             raise HTTPException(404, "Unknown suite")
-        rows = repo.runs.runs({"suite": ident})
+        rows = presented(repo.runs.runs({"suite": ident}))
         metrics = suite_metrics(rows, k)
         board = repo.artifacts.json(selected["prefix"] + "/leaderboard.json")
         launch = repo.artifacts.json(f"jobs/{selected['batch'].get('launch_id')}/job.json")
@@ -264,6 +307,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             request,
             "suite.html",
             suite=selected,
+            suite_title=suite_title(selected, rows),
             runs=rows,
             stats=summary(rows),
             k=k,
@@ -330,7 +374,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         )
 
     @app.get("/run", response_class=HTMLResponse)
-    def panel(request: Request):
+    async def panel(request: Request):
         refresh()
         return render(
             request,
@@ -340,6 +384,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             graphs=graph_variants(),
             profiles=PROFILES,
             enabled=jobs is not None,
+            phoenix_available=await phoenix_available(),
         )
 
     @app.post("/api/preview")
@@ -354,6 +399,9 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         return {
             "command": display_command(argv),
             "plan": job_plan(body, repo),
+            "authorization_required": body.provider == "openrouter"
+            and body.command != "eval"
+            and not body.confirm_paid,
             **await jobs.preflight.check(body, repo),
         }
 

@@ -756,3 +756,7 @@ input[type="checkbox"] {
 
 .sidebar .brand { display: flex; }
 @media (max-width:760px) { .sidebar nav { display:flex; flex-wrap:wrap; gap:4px; } }
+
+.system-summary .outcome-column {
+  min-width: 280px;
+}

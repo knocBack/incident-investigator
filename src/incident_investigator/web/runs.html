@@ -43,7 +43,7 @@
             <h2>Suites</h2>
             {% for suite in suites %}
                 <p>
-                    <a href="/suites/{{ suite.id }}">{{ suite.name }}</a>
+                    <a href="/suites/{{ suite.id }}">{{ suite.title }}</a>
                     <small>{{ suite.batch.get('suite_set', 'legacy') }} · {{ suite.batch.get('systems', ['multi'])|join(' / ') }}</small>
                 </p>
             {% endfor %}
