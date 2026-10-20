@@ -2,8 +2,12 @@
     {% if v is none or v is undefined %}unknown{% else %}{{ v }}{% endif %}
 {%- endmacro %}
 {% macro badge(v) -%}
-    <span class="badge {{ v }}">{{ v }}</span>
+    {% set meanings = {'correct': 'Required diagnosis and evidence checks passed, including justified uncertainty where expected.', 'partial': 'Some diagnosis checks passed; the required cause and evidence checks did not all pass.', 'inconclusive': 'No adequately supported cause was established; inspect Grade for the missing checks.', 'no_report': 'No final investigation report was completed.'} %}
+    <span class="badge {{ v }}"{% if v in meanings %} title="{{ meanings[v] }}"{% endif %}>{{ v }}</span>
 {%- endmacro %}
+{% macro verdict_legend() %}
+    <details class="caption"><summary>What do the verdicts mean?</summary><p>Correct: required diagnosis and evidence checks passed, including justified uncertainty where expected. Partial: some diagnosis checks passed, but not all required cause and evidence checks. Inconclusive: no adequately supported cause was established. No_report: no final investigation report was completed. Open Grade for the checks behind each verdict.</p></details>
+{% endmacro %}
 {% macro stats(s) %}
     <div class="stats">
         <div class="stat">
@@ -54,7 +58,7 @@
                             {% if r.model == 'scripted' %}<small>Canned console replay · inconclusive expected</small>{% endif %}
                         </td>
                         <td>
-                            {{ badge(r.verdict) }}<small>{{ r.status }}</small>
+                            {{ badge(r.verdict) }}<small>{{ r.execution_label|default(r.status) }}</small>
                             {% if r.phoenix_url|phoenix_url %}
                                 <a class="button small"
                                    href="{{ r.phoenix_url|phoenix_url }}"
@@ -111,7 +115,7 @@
         {% if row.free_no_charge %}<p>free model, no charge · token usage may remain unknown</p>{% endif %}
         {{ resources(dict(row.resources, free_no_charge=row.free_no_charge, scripted_no_charge=row.scripted_no_charge)) }}
         {% for run in row.runs %}
-            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.status }}</a><small>{{ run.outcome }}</small></p>{% endif %}
+            {% if run.id %}<p><a href="/runs/{{ run.id }}">{{ run.run_id[:8] }} · {{ run.verdict }} · {{ run.execution_label|default(run.status) }}</a><small>{{ run.outcome }}</small></p>{% endif %}
         {% endfor %}
     {% else %}<p>No observed attempt.</p>{% endif %}
 {% endmacro %}

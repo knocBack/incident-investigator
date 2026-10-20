@@ -1,8 +1,10 @@
 {% extends "base.html" %}
+{% import 'macros.html' as m %}
 {% block content %}
     <span class="eyebrow">CLI job {{ job.id }}</span>
     <h1 id="job-status">{{ job.heading }}</h1>
     <p class="callout {{ job.outcome_tone }}" id="job-outcome" role="status">{{ job.outcome }}</p>
+    {{ m.verdict_legend() }}
     <div class="actions"><button class="button" id="cancel-job" data-job="{{ job.id }}" {% if not job.can_cancel %}disabled{% endif %} {% if not job.can_cancel and job.status != 'cancelling' %}hidden{% endif %}>{{ 'Cancelling…' if job.status == 'cancelling' else 'Cancel job' }}</button><span id="cancel-status" role="status"></span></div>
     <div id="job-runs">
         {% for suite in job.suites %}<p><a class="button primary" href="/suites/{{ suite.id }}">{{ suite.results_label }}</a></p>{% endfor %}

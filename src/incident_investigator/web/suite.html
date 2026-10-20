@@ -4,7 +4,9 @@
     <span class="eyebrow">Exploratory · no acceptance threshold</span>
     <h1>{{ suite_title }}</h1>
     <p class="subtitle">Set {{ suite.batch.get('suite_set', 'legacy') }} · Systems {{ selected_systems|join(' / ') }} · staged workflow</p>
-    <p class="page-note">{{ stats.runs }} observed attempts · total cost {{ m.cost(stats) }}</p>
+    <p class="page-note">{% if planned is not none %}{{ stats.runs }} of {{ planned }} planned attempts ran{% else %}{{ stats.runs }} observed attempts{% endif %} · total cost {{ m.cost(stats) }}</p>
+    {% if cancelled %}<p class="callout warning">Cancelled by user. Results so far are retained; interrupted attempts did not finish. {% if planned is not none %}{{ planned - stats.runs }} planned attempts never started.{% endif %}</p>{% endif %}
+    {{ m.verdict_legend() }}
     <p class="caption">Unknown usage stays unknown; known subtotals are lower bounds.</p>
     <form class="filters">
         <label>k<input type="number" min="1" max="100" name="k" value="{{ k }}"></label>
@@ -14,7 +16,7 @@
     </form>
     <p class="caption">Suite ID {{ suite.name }}</p>
     <h2>System summary</h2>
-    {% for pair in paired %}<p class="callout info"><strong>{{ pair.fault }} · {{ pair.model }} · {{ pair.case_set }}</strong>: {{ pair.outcome }}</p>{% endfor %}
+    {% for group in paired|groupby('outcome') %}<p class="callout info"><strong>{% for pair in group.list %}{{ pair.fault }} · {{ pair.model }} · {{ pair.case_set }}{% if not loop.last %}; {% endif %}{% endfor %}</strong>: {{ group.grouper }}</p>{% endfor %}
     {% if provisional %}<p class="callout info">Provisional: the suite is incomplete or still running. These are retained observations so far.</p>{% endif %}
     <p class="caption">Execution failures count runs that stopped without completing reporting. Model-call errors count failed model requests, including retries and failures followed by a partial report. pass@k and pass^k are means across incidents, with k capped per incident. Primary and reliability sets remain separate.</p>
     <p class="caption">Grounding is the fraction of ranked hypotheses with valid supporting references and at least one retrieved observation. The score averages measured attempts; (measured/total) counts attempts with a score out of all retained attempts. Unknown means no score was available; this is a provenance check, not proof of semantic support.</p>
@@ -46,7 +48,6 @@
     {% for pair in paired %}
         <section class="card">
             <h3>{{ pair.fault }} <small>{{ pair.case_set }} · {{ pair.model }}</small></h3>
-            <p class="callout info">{{ pair.outcome }}</p>
             <div class="grid2">
                 <div><span class="eyebrow">Multi</span>{{ m.result_card(pair.get('multi')) }}</div>
                 <div><span class="eyebrow">Single</span>{{ m.result_card(pair.get('single')) }}</div>

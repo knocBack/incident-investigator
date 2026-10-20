@@ -268,7 +268,11 @@ def main() -> None:
         uvicorn.run(create_console(), host="127.0.0.1", port=args.port)
         return
     if args.command in {"eval", "eval-suite"}:
-        asyncio.run(_graceful_evaluation(args))
+        try:
+            asyncio.run(_graceful_evaluation(args))
+        except asyncio.CancelledError:
+            print("Cancelled; results and spend records finalized", flush=True)
+            raise SystemExit(143) from None
         return
     if args.command == "inspect":
         result = json.loads((args.run_dir / "result.json").read_text())

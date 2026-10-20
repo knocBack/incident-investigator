@@ -23,7 +23,7 @@ function setup() {
   form.elements = Object.fromEntries(Object.entries({command:"eval-suite",provider:"scripted",model_id:"",case_set:"primary",system:"multi",limits_profile:"demo",repeats:"1",concurrency:"2",budget_usd:"0",run_budget_usd:"",call_seconds:"",wall_seconds:"",max_input_tokens:"64000",run:"",trace:"",confirm_paid:""}).map(([k,v])=>[k,new Element(v)]));
   form.elements.namedItem = name => form.elements[name];
   form.elements.limits_profile.selectedOptions = [{value:"demo",dataset:{callSeconds:30,wallSeconds:240}}];
-  const nodes = Object.fromEntries(["suite-budget-warning","run-error","command-preview","launch-job","launch-status","run-error-fields","reservation-estimate","replay-note","job-limit","preview-command"].map(k=>[k,new Element()]));
+  const nodes = Object.fromEntries(["suite-budget-warning","run-error","command-preview","launch-job","launch-status","run-error-fields","reservation-estimate","replay-note","job-limit","retry-preview"].map(k=>[k,new Element()]));
   nodes["run-form"] = form;
   const document = {
     querySelector: () => ({content:"local-token"}), querySelectorAll: () => [],
@@ -78,12 +78,14 @@ function setup() {
   assert.equal(permitted.body.confirm_paid, true);
   b.reply(permitted, {url:"/jobs/authorized"}); await confirmed;
 
-  // Failed checks stay visible; explicit Update retries the same settings.
+  // The live preview hides its retry control unless a settings check fails.
   const c = setup(); const refused = c.form.emit("submit");
   c.reply(c.requests[0], {detail:"Price catalogue unavailable"}, false); await refused;
   assert.equal(c.requests.length, 1); assert.equal(c.nodes["launch-job"].disabled, true);
   assert.match(c.nodes["launch-status"].textContent, /Price catalogue unavailable/);
-  c.nodes["preview-command"].emit("click"); assert.equal(c.requests.length, 2);
+  assert.equal(c.nodes["retry-preview"].hidden, false);
+  c.nodes["retry-preview"].emit("click"); assert.equal(c.requests.length, 2);
+  assert.equal(c.nodes["retry-preview"].hidden, true);
   c.reply(c.requests[1], {launch_allowed:false,message:"Raise Suite cap USD",blocked_fields:["budget_usd"]}); await flush();
   assert.match(c.nodes["launch-status"].textContent, /Raise Suite cap USD/);
   assert.equal(c.nodes["launch-job"].disabled, true);
@@ -110,7 +112,12 @@ function setup() {
     querySelector: () => ({content:"local-token"}), querySelectorAll: () => [],
     getElementById: name => ({"cancel-job":cancelButton,"cancel-status":cancelStatus})[name] || null,
   };
-  vm.runInNewContext(script, {document:cancelDocument,window:{confirm:()=>true},fetch:(url, options)=> {
+  vm.runInNewContext(script, {document:cancelDocument,window:{confirm:message=>{
+    assert.match(message, /Running attempts will stop/);
+    assert.match(message, /Results so far will be kept/);
+    assert.match(message, /Spend already incurred still applies/);
+    return true;
+  }},fetch:(url, options)=> {
     assert.equal(url, "/api/jobs/child/cancel"); assert.equal(JSON.parse(options.body).confirm, true);
     return new Promise(resolve=>acknowledge=resolve);
   }});
@@ -118,5 +125,22 @@ function setup() {
   cancelButton.hidden = true; cancelStatus.textContent = "Cancelled by user; graceful finalization finished.";
   acknowledge({ok:true,json:async()=>({status:"cancelling"})}); await cancellation;
   assert.match(cancelStatus.textContent, /finalization finished/);
+  // A natural finish wins a cancel race, including a late refused-cancel response.
+  const jobNodes = Object.fromEntries(["cancel-job","cancel-status","job-output","job-status","job-outcome","job-exit","job-runs"].map(k=>[k,new Element()]));
+  jobNodes["cancel-job"].dataset.job = "natural";
+  jobNodes["job-output"].dataset.job = "natural";
+  let stream, refuse;
+  const jobDocument = {querySelector:()=>({content:"local-token"}),querySelectorAll:()=>[],getElementById:name=>jobNodes[name] || null,createElement:()=>new Element()};
+  vm.runInNewContext(script, {document:jobDocument,window:{confirm:()=>true},EventSource:class {constructor(){stream=this;} close(){}},fetch:()=>new Promise(resolve=>refuse=resolve)});
+  const raced = jobNodes["cancel-job"].emit("click");
+  stream.onmessage({data:JSON.stringify({status:"completed",exit_code:0,runs:[{id:"retained",fault:"case",system:"single",status:"interrupted",execution_label:"cancelled in flight",verdict:"no_report"}]})});
+  refuse({ok:false,json:async()=>({detail:"Only a running job can be cancelled"})}); await raced;
+  assert.equal(jobNodes["cancel-status"].textContent, "");
+  assert.equal(jobNodes["job-status"].textContent, "completed");
+  assert.equal(jobNodes["job-exit"].textContent, "Exit code: 0");
+  assert.match(jobNodes["job-runs"].children[0].children[0].textContent, /cancelled in flight/);
+  stream.onmessage({data:JSON.stringify({status:"cancelled",exit_code:143})});
+  assert.match(jobNodes["job-exit"].textContent, /Cancelled by user/);
+  assert.doesNotMatch(jobNodes["job-exit"].textContent, /Exit code/);
   process.stdout.write("first-click launch, latest-settings check, authorization and retry passed\n");
 })().catch(error => { process.stderr.write(error.stack + "\n"); process.exitCode = 1; }).finally(() => clearTimeout(watchdog));

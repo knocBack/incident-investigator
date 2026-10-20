@@ -134,7 +134,7 @@ class LaunchPreflight:
             "reservation_guide": (
                 "Free model: public prices are zero; no charge is reserved. Usage may still be unavailable after a provider failure."
                 if bound == 0
-                else f"Each initial call reserves about USD {bound:.4f}, with a minimum cap of USD {suggested:.2f} for one call. At this initial size, up to {limits.max_model_calls} model calls would reserve USD {run_guide:.2f}: an illustrative reservation ceiling, not expected spend or a required cap. Later prompts can be larger; a lower cap stops calls when reservations no longer fit."
+                else f"Minimum cap: USD {suggested:.2f} to fit one initial call. This is a starting minimum, not a full-run estimate; a run can need up to {limits.max_model_calls} model calls. Set a cap you are willing to spend; calls stop when reservations no longer fit."
             ),
             "message": f"Raise {' and '.join(blocked)} to at least USD {suggested:.2f} to fit an initial call. Budget for several calls per run."
             if blocked

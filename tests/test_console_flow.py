@@ -71,7 +71,7 @@ def test_preflight_blocks_both_caps_before_start_and_allows_free_calls(repo, tmp
             result["estimated_call_reservation"]
         )
         assert (
-            "minimum cap" in result["reservation_guide"]
+            "Minimum cap" in result["reservation_guide"]
             and "up to 40 model calls" in result["reservation_guide"]
         )
         assert client.post("/api/jobs", json=body, headers=token).status_code == 422
@@ -93,6 +93,11 @@ def test_preflight_blocks_both_caps_before_start_and_allows_free_calls(repo, tmp
         assert 'id="run-error-fields"' in page
         assert "Without an installed replay file" not in page
         assert "Multi: six collaborating roles" in page and "Single: one investigator" in page
+        assert "Update command" not in page
+        assert "Command preview updates automatically" in page
+        body.update(budget_usd="0.45", run_budget_usd="0.08", repeats=2)
+        free_preview = client.post("/api/preview", json=body, headers=token).json()
+        assert free_preview["free_model"] and not free_preview["budget_warning"]
         assert "same snapshots and limits" in page
         assert 'data-call-seconds="90.0"' in page and 'data-wall-seconds="1200.0"' in page
 

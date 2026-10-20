@@ -315,6 +315,19 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
         selected_systems = (
             selected["batch"].get("systems") or sorted({r["system"] for r in rows}) or ["multi"]
         )
+        batch = selected["batch"]
+        planned = (
+            len(batch["faults"])
+            * len(batch["models"])
+            * batch.get("repeats", 1)
+            * len(selected_systems)
+            if batch.get("faults") and batch.get("models")
+            else None
+        )
+        skipped = board.get("skipped", batch.get("skipped", []))
+        cancelled = launch.get("status") == "cancelled" or any(
+            "cancelled before admission" in item.get("reason", "") for item in skipped
+        )
         return render(
             request,
             "suite.html",
@@ -323,6 +336,8 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             selected_systems=selected_systems,
             runs=rows,
             stats=summary(rows),
+            planned=planned,
+            cancelled=cancelled,
             k=k,
             metrics=metrics,
             paired=paired_metrics(
@@ -330,7 +345,7 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
                 provisional=provisional,
                 skipped=[
                     {**item, "case_set": "variants" if item.get("fault") in variants else "primary"}
-                    for item in board.get("skipped", selected["batch"].get("skipped", []))
+                    for item in skipped
                 ],
                 systems=selected_systems,
             ),
@@ -426,14 +441,17 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             argv, _ = jobs.preview(body, "preview")
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        validation = await jobs.preflight.check(body, repo)
         return {
             "command": display_command(argv),
             "plan": job_plan(body, repo),
-            "budget_warning": suite_budget_warning(body, job_plan(body, repo)),
+            "budget_warning": ""
+            if validation.get("free_model")
+            else suite_budget_warning(body, job_plan(body, repo)),
             "authorization_required": body.provider == "openrouter"
             and body.command != "eval"
             and not body.confirm_paid,
-            **await jobs.preflight.check(body, repo),
+            **validation,
         }
 
     @app.post("/api/jobs")

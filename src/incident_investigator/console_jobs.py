@@ -340,6 +340,7 @@ class Jobs:
             r
             for r in metadata["runs"]
             if r["status"] in {"failed", "resource_exhausted", "interrupted"}
+            and not (metadata["status"] == "cancelled" and r["status"] == "interrupted")
         ]
         failures = []
         for run in failed:
@@ -384,8 +385,9 @@ class Jobs:
                 "Cancellation requested by user; waiting for graceful shutdown and artifact finalization."
             )
         elif metadata["status"] == "cancelled":
+            cancelled = sum(r["status"] == "interrupted" for r in metadata["runs"])
             metadata["outcome"] = (
-                f"Cancelled by user; {len(metadata['runs'])} run reports retained. Open the {target} and job log for retained results and spend reconciliation."
+                f"Cancelled by user; {len(metadata['runs'])} run reports retained; {cancelled} cancelled in flight. Open the {target} and job log for retained results and spend reconciliation."
             )
             if metadata.get("termination") == "SIGKILL":
                 metadata["outcome"] += (
@@ -400,8 +402,9 @@ class Jobs:
                 )
             else:
                 reason = "Stopped by budget cap: " if budget_stops else "Stopped: "
+                skipped_text = f"{len(skipped)} attempts skipped; " if skipped else ""
                 metadata["outcome"] = (
-                    f"{reason}{len(skipped)} attempts skipped; {len(metadata['runs'])} run reports retained. Open the {target} for reasons and recorded usage."
+                    f"{reason}{skipped_text}{len(metadata['runs'])} run reports retained. Open the {target} for reasons and recorded usage."
                 )
         elif metadata["status"] == "running":
             metadata["outcome"] = (
@@ -485,7 +488,11 @@ class Jobs:
             cancel_waiter = asyncio.create_task(cancel_event.wait())
             async with asyncio.timeout(metadata["plan"]["timeout_seconds"]):
                 await asyncio.wait((completion, cancel_waiter), return_when=asyncio.FIRST_COMPLETED)
-                if cancel_event.is_set():
+                if completion.done() or process.returncode == 0:
+                    metadata["exit_code"] = await completion
+                    metadata["status"] = "completed" if metadata["exit_code"] == 0 else "failed"
+                    metadata.pop("stop_reason", None)
+                elif cancel_event.is_set():
                     metadata.update(status="cancelled", stop_reason="cancelled by user")
                 else:
                     metadata["exit_code"] = await completion
@@ -501,6 +508,13 @@ class Jobs:
             metadata["status"] = "failed"
             metadata["error"] = type(exc).__name__
         finally:
+            if (
+                process
+                and process.returncode is not None
+                and metadata["status"] in {"completed", "failed"}
+            ):
+                # Refuse cancellation while a naturally finished child's output is ingested.
+                store.save_json(f"jobs/{ident}/job.json", metadata)
             if process and process.returncode is None:
                 with suppress(ProcessLookupError):
                     process.terminate()

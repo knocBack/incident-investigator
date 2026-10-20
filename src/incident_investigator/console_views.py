@@ -122,6 +122,8 @@ def present_run(run, store, suite_prefix=None):
         }
     result = store.json(run["prefix"] + "/result.json")
     saved = store.json(run["prefix"] + "/run.json")
+    launch = store.json(f"jobs/{run.get('launch_id')}/job.json")
+    cancelled = launch.get("status") == "cancelled" and run["status"] == "interrupted"
     state = result.get("state", {})
     events = store.lines(run["prefix"] + "/trace.jsonl")
     transitions = [e for e in events if e.get("event") == "state_transition"]
@@ -183,7 +185,9 @@ def present_run(run, store, suite_prefix=None):
     else:
         failed = run["status"] in {"failed", "resource_exhausted", "interrupted"}
         outcome = (
-            f"stopped during {stage}"
+            "cancelled in flight"
+            if cancelled
+            else f"stopped during {stage}"
             if failed
             else (
                 "partial report completed"
@@ -252,7 +256,14 @@ def present_run(run, store, suite_prefix=None):
         if events or "receipts" in result or "calls" in state
         else None,
         "provider_issue": provider_issue,
-        "incomplete_reason": failure_label(reason or provider_issue or run["status"])
+        "execution_label": "cancelled in flight" if cancelled else run["status"],
+        "incomplete_reason": "cancelled in flight"
+        if cancelled
+        else failure_label(
+            reason
+            or provider_issue
+            or ("no final report" if run.get("verdict") == "no_report" else run["status"])
+        )
         if run["status"] in {"failed", "resource_exhausted", "interrupted"}
         or run.get("verdict") == "no_report"
         else "",
@@ -452,7 +463,7 @@ def suite_metrics(runs, k):
         groups.setdefault(
             (
                 run["fault"],
-                run["model"],
+                run.get("model") or run.get("grade", {}).get("suite_attempt", {}).get("model", ""),
                 run["graph"],
                 recorded_system(run.get("system"), run["graph"]),
                 run.get("case_set", "primary"),
@@ -516,7 +527,7 @@ def suite_metrics(runs, k):
 def system_metrics(board, runs, k):
     """Use recorded leaderboard headlines; fall back to observed attempts while live."""
     rows = board.get("models", [])
-    if not rows:
+    if not rows or (runs and any(not row.get("models") for row in rows)):
         groups = {}
         for run in runs:
             groups.setdefault((run["system"], run["model"], run["case_set"]), []).append(run)

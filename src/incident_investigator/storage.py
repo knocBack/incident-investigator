@@ -348,6 +348,11 @@ class IndexedRunRepository(RunRepository):
             models = (
                 result.get("models")
                 or grade.get("models")
+                or (
+                    {"requested": grade["suite_attempt"]["model"]}
+                    if grade.get("suite_attempt", {}).get("model")
+                    else {}
+                )
                 or ({"requested": attempt["model"]} if attempt.get("model") else {})
             )
             suite = suite_for(prefix)
@@ -389,7 +394,8 @@ class IndexedRunRepository(RunRepository):
                     "phoenix_url": phoenix.get("url"),
                     "model": ", ".join(sorted(set(models.values()))),
                     "graph": recorded_graph(result.get("graph", grade.get("graph"))),
-                    "status": result.get(
+                    "status": grade.get("process", {}).get("execution_status")
+                    or result.get(
                         "status",
                         "failed" if prefix + "/attempt-error.json" in keys else "unfinished",
                     ),

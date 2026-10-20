@@ -313,6 +313,8 @@ table {
   font-size: 12px;
 }
 th {
+  overflow-wrap: normal;
+  word-break: normal;
   text-align: left;
   font-size: 10px;
   text-transform: uppercase;
@@ -435,6 +437,13 @@ th.number {
 .report li {
   font-size: 13px;
   line-height: 1.75;
+}
+.report {
+  overflow-x: auto;
+}
+.report td {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .report table {
   font-size: 10px;

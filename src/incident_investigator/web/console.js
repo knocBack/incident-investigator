@@ -123,6 +123,7 @@ if (form && form.dataset.enabled === "yes") {
     previewKey = key;
     const version = ++previewVersion;
     pending = true;
+    document.getElementById("retry-preview").hidden = true;
     renderLaunch();
     preview.textContent = "Preview out of date; refreshing from current settings...";
     const priorBudgetWarning = document.getElementById("suite-budget-warning");
@@ -157,6 +158,7 @@ if (form && form.dataset.enabled === "yes") {
       } catch (e) {
         if (version === previewVersion) {
           checked = null;
+          document.getElementById("retry-preview").hidden = false;
           pending = false;
           preview.textContent = "Resolve settings to preview the command.";
           document.getElementById("job-limit").textContent = "Job limit unavailable until settings are valid.";
@@ -169,7 +171,7 @@ if (form && form.dataset.enabled === "yes") {
     })();
     return previewPromise;
   }
-  document.getElementById("preview-command").addEventListener("click", () => update(true));
+  document.getElementById("retry-preview").addEventListener("click", () => update(true));
   function selectSet() {
     for (const input of form.querySelectorAll('input[name="faults"]')) {
       const allowed = form.elements.case_set.value === "all" || input.dataset.set === form.elements.case_set.value;
@@ -215,7 +217,7 @@ if (form && form.dataset.enabled === "yes") {
 }
 const cancel = document.getElementById("cancel-job");
 if (cancel) cancel.addEventListener("click", async () => {
-  if (!window.confirm("Cancel this job? The running attempt will stop; graceful shutdown will retain results and reconcile spend where available.")) return;
+  if (!window.confirm("Cancel this job? Running attempts will stop and no new attempts will start. Results so far will be kept. Spend already incurred still applies; spend records will be finalized where available.")) return;
   cancel.disabled = true;
   const status = document.getElementById("cancel-status");
   status.textContent = "Requesting cancellation…";
@@ -223,7 +225,7 @@ if (cancel) cancel.addEventListener("click", async () => {
     await post("/api/jobs/" + encodeURIComponent(cancel.dataset.job) + "/cancel", {confirm: true});
     if (!cancel.hidden) status.textContent = "Cancellation requested; waiting for graceful finalization.";
   } catch (error) {
-    status.textContent = error.message;
+    if (!cancel.hidden) status.textContent = error.message;
   }
 });
 const output = document.getElementById("job-output");
@@ -245,7 +247,8 @@ if (output) {
       } else output.append(line + "\n");
     }
     document.getElementById("job-exit").textContent =
-      job.exit_code === undefined
+      job.status === "cancelled" ? "Cancelled by user; retained results are available above."
+      : job.exit_code === undefined
         ? job.error || ""
         : "Exit code: " + job.exit_code;
     if (cancel) {
@@ -253,6 +256,7 @@ if (output) {
       cancel.disabled = !job.can_cancel;
       cancel.textContent = job.status === "cancelling" ? "Cancelling…" : "Cancel job";
       if (job.status === "cancelled") document.getElementById("cancel-status").textContent = job.termination === "SIGKILL" ? "Cancelled by user; forced stop required." : "Cancelled by user; graceful finalization finished.";
+      else if (!["running", "cancelling"].includes(job.status)) document.getElementById("cancel-status").textContent = "";
     }
     if (!["running", "cancelling"].includes(job.status)) stream.close();
     const runs = document.getElementById("job-runs");
@@ -267,7 +271,7 @@ if (output) {
     for (const run of job.runs || []) {
       const p = document.createElement("p"), a = document.createElement("a");
       a.href = "/runs/" + encodeURIComponent(run.id) + "?tab=report";
-      a.textContent = ["Open report", run.fault, run.system, run.status, run.verdict].join(" · ");
+      a.textContent = ["Open report", run.fault, run.system, run.execution_label || run.status, run.verdict].join(" · ");
       p.append(a);
       const progress = document.createElement("small");
       progress.textContent = run.outcome || run.progress || "Progress unavailable";
