@@ -625,3 +625,140 @@ def test_comparison_does_not_invent_a_winner_when_grades_are_pending_or_absent()
     assert "same correct-verdict rate" in comparison_outcome(
         {"multi": {**row, "pass1": 1, "correct": 1}, "single": {**row, "pass1": 1, "correct": 1}}
     )
+
+
+@pytest.mark.parametrize(
+    "graph,system", [("staged", "multi"), ("single", "single"), (None, "multi")]
+)
+def test_legacy_artifacts_render_without_new_metadata(repo, graph, system):
+    """Regression: historical leaderboard rows lack system and suite_kind."""
+    from incident_investigator.console_views import system_metrics
+
+    store = repo.artifacts
+    provenance = {"graph": graph} if graph is not None else {}
+    models = {"requested": "test/legacy"}
+    result = {
+        "run_id": "legacy",
+        "case_id": "legacy-case",
+        "status": "completed",
+        "models": models,
+        **provenance,
+    }
+    if graph is None:
+        result.pop("status")  # Older incomplete exports can lack final execution metadata.
+    grade = {
+        "run_id": "legacy",
+        "family": "bad_configuration",
+        "verdict": "inconclusive",
+        "models": models,
+        **provenance,
+    }
+    head = {
+        "models": models,
+        "runs": 1,
+        "verdicts": {"inconclusive": 1},
+        "execution_failures": 0,
+        "mean_cost": None,
+        "mean_grounding": None,
+        "faults": {"bad_configuration": {"n": 1, "correct": 0}},
+        **provenance,
+    }
+    store.save_json("suites/legacy/result/result.json", result)
+    store.save_json("suites/legacy/result/grade.json", grade)
+    store.save_json("suites/legacy/leaderboard.json", {"models": [head]})
+    before = {
+        name: store.read("suites/legacy/" + name)
+        for name in ("result/result.json", "result/grade.json", "leaderboard.json")
+    }
+    repo.runs.refresh()
+    suite = repo.runs.suites()[0]
+    rows = repo.runs.runs({"suite": suite["id"]})
+    heads = system_metrics({"models": [head]}, rows, 4)
+    assert heads[0]["system"] == system and heads[0]["suite_kind"] == "primary"
+    assert len(heads[0]["outcomes"]) == 1
+    with TestClient(create_console(repo)) as client:
+        page = client.get(f"/suites/{suite['id']}")
+        assert page.status_code == 200
+        assert "System summary" in page.text and "test/legacy" in page.text
+        assert "free model, no charge" not in page.text
+        for tab in ("report", "grade"):
+            response = client.get(f"/runs/{rows[0]['id']}?tab={tab}")
+            assert response.status_code == 200
+            assert "Case legacy-case" in response.text and "Profile unavailable" in response.text
+        assert client.get("/").status_code == 200
+    for name, data in before.items():
+        assert store.read("suites/legacy/" + name) == data
+    # Missing optional aggregates stay unknown, including a fault with no counts.
+    minimal = system_metrics({"models": [{"faults": {"old": {}}}]}, [], 4)[0]
+    assert minimal["system"] == "multi" and minimal["suite_kind"] == "primary"
+    assert minimal["passk"] is None
+
+
+@pytest.mark.parametrize("status", ["completed", "stopped", "running"])
+@pytest.mark.parametrize("observed", [True, False])
+def test_missing_attempt_has_final_skip_reason_and_identifiable_callout(repo, status, observed):
+    store = repo.artifacts
+    skips = [
+        {
+            "fault": "case-02",
+            "model": "test/other",
+            "system": "single",
+            "reason": "other model skip",
+        },
+        {
+            "fault": "case-02",
+            "model": "test/paired",
+            "system": "single",
+            "reason": "suite cancelled before admission",
+        },
+        {
+            "fault": "reliability-01",
+            "model": "test/paired",
+            "system": "single",
+            "reason": "variant cap refused",
+        },
+    ]
+    store.save_json("jobs/missing/job.json", {"id": "missing", "status": status})
+    store.save_json(
+        "suites/missing/batch.json",
+        {
+            "launch_id": "missing",
+            "systems": ["multi", "single"],
+            "suite_set": "all",
+            "skipped": skips,
+        },
+    )
+    store.save_json("suites/missing/leaderboard.json", {"models": [], "skipped": skips})
+    if observed:
+        store.save_json(
+            "suites/missing/r/result.json",
+            {
+                "run_id": "r",
+                "status": "completed",
+                "system": "multi",
+                "models": {"requested": "test/paired"},
+            },
+        )
+        store.save_json(
+            "suites/missing/r/grade.json",
+            {"run_id": "r", "family": "case-02", "verdict": "inconclusive"},
+        )
+    repo.runs.refresh()
+    suite = repo.runs.suites()[0]
+    with TestClient(create_console(repo)) as client:
+        response = client.get(f"/suites/{suite['id']}")
+        assert response.status_code == 200
+        page = response.text
+        assert "case-02 · test/paired · primary" in page
+        assert "case-02 · test/other · primary" in page
+        assert "reliability-01 · test/paired · variants" in page
+        if status == "running":
+            assert "Awaiting attempts from both systems" in page
+        else:
+            assert "Awaiting attempts" not in page
+            assert (
+                "Single has no retained attempt; skipped: suite cancelled before admission." in page
+            )
+            assert "Single has no retained attempt; skipped: other model skip." in page
+            assert "Single has no retained attempt; skipped: variant cap refused." in page
+        assert "Phoenix · live detailed view for agent traces" in client.get("/run").text

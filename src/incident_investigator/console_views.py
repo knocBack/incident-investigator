@@ -194,7 +194,31 @@ def present_run(run, store, suite_prefix=None):
 def comparison_outcome(metrics):
     multi, single = metrics.get("multi"), metrics.get("single")
     if not multi or not single:
-        return "Awaiting attempts from both systems."
+        provisional = metrics.get(
+            "provisional", any(row.get("provisional", True) for row in (multi, single) if row)
+        )
+        if provisional:
+            return "Awaiting attempts from both systems."
+        missing = []
+        for system, row in (("multi", multi), ("single", single)):
+            if row:
+                continue
+            reasons = list(
+                dict.fromkeys(
+                    item.get("reason", "skip reason unavailable")
+                    for item in metrics.get("skipped", [])
+                    if recorded_system(item.get("system"), item.get("graph")) == system
+                )
+            )
+            reason = (
+                "skipped: " + "; ".join(reasons)
+                if reasons
+                else "not selected for this suite"
+                if metrics.get("systems") and system not in metrics["systems"]
+                else "no skip reason was recorded"
+            )
+            missing.append(f"{system.title()} has no retained attempt; {reason}.")
+        return " ".join(missing)
     if multi["provisional"] or single["provisional"]:
         return "Comparison is provisional while attempts or grades are pending."
     if multi["pass1"] != single["pass1"]:
@@ -377,19 +401,24 @@ def system_metrics(board, runs, k):
             )
     result = []
     for row in rows:
+        system = recorded_system(row.get("system"), row.get("graph"))
+        suite_kind = row.get("suite_kind", "primary")
         passes = [
             _pass_metrics(f["n"], f["correct"], min(k, f["n"]))
             for f in row.get("faults", {}).values()
-            if f["n"]
+            if f.get("n") and f.get("correct") is not None
         ]
         result.append(
             {
                 **row,
+                "system": system,
+                "suite_kind": suite_kind,
+                "models": row.get("models", {}),
                 "outcomes": [
                     r
                     for r in runs
-                    if r["system"] == row["system"]
-                    and (r["case_set"] == "primary") == (row["suite_kind"] == "primary")
+                    if r["system"] == system
+                    and (r["case_set"] == "primary") == (suite_kind == "primary")
                     and r["model"] == ", ".join(sorted(set(row.get("models", {}).values())))
                 ],
                 "passk": sum(p[0] for p in passes) / len(passes) if passes else None,
@@ -415,10 +444,25 @@ def summary(runs):
     }
 
 
-def paired_metrics(metrics):
+def paired_metrics(metrics, *, provisional=None, skipped=(), systems=()):
     pairs = {}
     for row in metrics:
         key = (row["fault"], row["model"], row["case_set"])
         pair = pairs.setdefault(key, {"fault": key[0], "model": key[1], "case_set": key[2]})
         pair[row["system"]] = row
-    return [{**pairs[key], "outcome": comparison_outcome(pairs[key])} for key in sorted(pairs)]
+    for item in skipped:
+        key = (
+            item.get("fault", "unknown"),
+            item.get("model", "unknown"),
+            item.get("case_set", "primary"),
+        )
+        pairs.setdefault(key, {"fault": key[0], "model": key[1], "case_set": key[2]})
+        pairs[key].setdefault("skipped", []).append(item)
+    result = []
+    for key in sorted(pairs):
+        pair = pairs[key]
+        if provisional is not None:
+            pair["provisional"] = provisional
+        pair["systems"] = systems
+        result.append({**pair, "outcome": comparison_outcome(pair)})
+    return result

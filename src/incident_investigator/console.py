@@ -312,7 +312,15 @@ def create_console(repo: Repositories | None = None, *, jobs: Jobs | None = None
             stats=summary(rows),
             k=k,
             metrics=metrics,
-            paired=paired_metrics(metrics),
+            paired=paired_metrics(
+                metrics,
+                provisional=provisional,
+                skipped=[
+                    {**item, "case_set": "variants" if item.get("fault") in variants else "primary"}
+                    for item in board.get("skipped", selected["batch"].get("skipped", []))
+                ],
+                systems=selected["batch"].get("systems", []),
+            ),
             systems=system_metrics(board, rows, k),
             provisional=provisional,
             primary_count=len(set(selected_cases) - variants),

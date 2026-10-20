@@ -14,7 +14,7 @@
     </form>
     <p class="caption">Suite ID {{ suite.name }}</p>
     <h2>System summary</h2>
-    {% for pair in paired %}<p class="callout info"><strong>{{ pair.fault }}</strong>: {{ pair.outcome }}</p>{% endfor %}
+    {% for pair in paired %}<p class="callout info"><strong>{{ pair.fault }} · {{ pair.model }} · {{ pair.case_set }}</strong>: {{ pair.outcome }}</p>{% endfor %}
     {% if provisional %}<p class="callout info">Provisional: the suite is incomplete or still running. These are retained observations so far.</p>{% endif %}
     <p class="caption">Grounding measures grader-matched support, not the number of evidence items. It averages measured attempts (measured/total). pass@k and pass^k are means across incidents, with k capped per incident. Primary and reliability sets remain separate.</p>
     <div class="card flush"><div class="table-wrap"><table class="system-summary">
