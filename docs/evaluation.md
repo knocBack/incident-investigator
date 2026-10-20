@@ -44,18 +44,20 @@ These are lexical and provenance checks, not semantic proof. A report can pass t
 
 ## Grounding
 
-Grounding is the fraction of an attempt's ranked hypotheses whose supporting references are all valid and include at least one retrieved observation. A hypothesis backed only by receipts scores zero.
+[Grounding](glossary.md) is scored per attempt over its ranked hypotheses. A hypothesis counts only when every supporting reference is valid and at least one is a retrieved observation. A hypothesis backed only by receipts scores zero.
 
 Suites show it as **score (m/n)**. The score is the mean over measured attempts. `m` counts attempts that had a score; `n` counts all retained attempts. An attempt with no hypotheses has no score, so `0.67 (3/5)` means three of five attempts were measured. **unknown (0/1)** means nothing was measured. Grounding checks provenance, not whether the evidence supports the claim.
 
 ## Failures, errors and stops
 
-| Term | Meaning |
+Execution failure, model-call error and budget-censored are defined in the [glossary](glossary.md). This table says how each outcome is recorded.
+
+| Outcome | How it is recorded |
 | --- | --- |
-| Execution failure | The run stopped without completing reporting: status `failed`, `resource_exhausted` or `interrupted`. It is not a wrong diagnosis |
-| Model-call error | A failed model request, including retries. A run can have errors and still complete, sometimes with a partial report |
+| Execution failure | Run status `failed`, `resource_exhausted` or `interrupted` |
+| Model-call error | Counted per failed request, including retries. The run can still complete, sometimes with a partial report |
 | `output_truncated` | The model hit its output-token limit (the adapter caps output at 4,096 tokens) before a valid answer. The affected role fails |
-| Budget-censored | The suite guard refused a reservation mid-attempt (`suite budget reservation refused call`). The attempt fails and keeps its report so far |
+| Budget-censored | Stop reason `suite budget reservation refused call`. The attempt fails and keeps its report so far |
 | Cancelled in flight | An attempt interrupted by the console's Cancel. Its partial report is kept |
 | Skipped | A planned attempt that never started, for example "suite cancelled before admission". It is recorded but not counted as observed |
 

@@ -63,7 +63,7 @@ Keep `--extra phoenix` on every `uv run` while exporting; a plain sync removes o
 | --- | --- |
 | Command | `eval-suite` investigates and grades fresh attempts; `demo` runs one lab injection; `eval` grades a saved run |
 | Set | `primary` (ten incidents), `variants` (R1 and R2) or `all` |
-| Cases | Tick cases to narrow the set. Leave all unticked to run the whole set |
+| Cases | The form opens with `bad_configuration` ticked. Tick cases to narrow the set, or untick all to run the whole set |
 | Provider | `scripted` replays canned actions; `openrouter` calls a real model |
 | System | `multi` (six roles), `single` (one investigator) or both on the same snapshots and limits |
 | Limits profile | `demo` for local replays; `demo-live` gives live providers more time |
