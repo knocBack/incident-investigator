@@ -45,8 +45,9 @@ def retry_after_seconds(value: str | None) -> float | None:
     return max(0.0, seconds) if math.isfinite(seconds) else None
 
 
-def backoff(retry: int, retry_after: float | None = None) -> float:
-    return max(retry_after or 0, min(30.0, 2.0**retry) + random.uniform(0, 0.5))
+def backoff(retry: int, retry_after: float | None = None, *, rate_limited=False) -> float:
+    floor = 4 if rate_limited and retry_after is None else 1
+    return max(retry_after or 0, min(30.0, floor * 2.0**retry) + random.uniform(0, 0.5))
 
 
 class ProviderCooldown:
@@ -55,17 +56,35 @@ class ProviderCooldown:
     def __init__(self):
         self.until = 0.0
         self._lock = asyncio.Lock()
+        self.revision = 0
 
     def defer(self, seconds: float):
         self.until = max(self.until, time.monotonic() + seconds)
+        self.revision += 1
 
-    async def wait(self):
-        async with self._lock:
-            while self.until > time.monotonic():
-                await asyncio.sleep(self.until - time.monotonic())
-            # Space queued attempts after a cooldown rather than waking them together.
-            if self.until:
-                self.until = time.monotonic() + 0.1 + random.uniform(0, 0.15)
+    async def wait(self, *, deadline: float | None = None):
+        waited = False
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                delay = self.until - now
+                if delay <= 0:
+                    # Only callers that actually waited pace the next queued caller.
+                    self.until = now + 0.1 + random.uniform(0, 0.15) if waited else 0.0
+                    return self.revision
+                if deadline is not None and self.until >= deadline:
+                    raise ModelCallError(
+                        f"Provider cooldown ({delay:.3g}s) cannot fit remaining run wall time ({max(0, deadline - now):.3g}s)",
+                        retryable=False,
+                        status=429,
+                        before_send=True,
+                        failure_class="rate_limited",
+                        retry_after=delay,
+                    )
+            # Do not hold the lock while sleeping: a shorter-lived run must be able
+            # to inspect the same cooldown and refuse immediately.
+            await asyncio.sleep(delay)
+            waited = True
 
 
 def _role(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -113,8 +132,11 @@ class OpenRouterModel:
         self._schema_rejected: set[str] = set()
         self.cooldown = cooldown or ProviderCooldown()
 
-    async def wait_ready(self):
-        await self.cooldown.wait()
+    async def wait_ready(self, *, deadline=None):
+        return await self.cooldown.wait(deadline=deadline)
+
+    def cooldown_ready(self, ticket):
+        return ticket == self.cooldown.revision
 
     def model_for_role(self, role: str) -> str:
         return self._models[role]
@@ -134,6 +156,9 @@ class OpenRouterModel:
             if status < 400:
                 status = 502
             message = error.get("message") if isinstance(error, dict) else None
+            detail = error.get("detail") if isinstance(error, dict) else None
+            if detail:
+                message = f"{message or 'provider error'}: {detail}"
             metadata = error.get("metadata", {}) if isinstance(error, dict) else {}
             raw = metadata.get("raw") if isinstance(metadata, dict) else None
             if isinstance(raw, str):
@@ -143,7 +168,13 @@ class OpenRouterModel:
                     detail = raw
                 if isinstance(detail, dict):
                     nested = detail.get("error", detail)
-                    detail = nested.get("message") if isinstance(nested, dict) else nested
+                    detail = (
+                        ": ".join(
+                            str(nested[key]) for key in ("message", "detail") if nested.get(key)
+                        )
+                        if isinstance(nested, dict)
+                        else nested
+                    )
                 if isinstance(detail, str) and detail:
                     message = f"{message or 'provider error'}: {detail}"
             message = self._redact(str(message or "provider returned an error"))[:1000]
@@ -161,6 +192,7 @@ class OpenRouterModel:
                     "not a valid model",
                     "model not found",
                     "does not exist",
+                    "not found for account",
                 )
             )
             transient = not permanent and (
@@ -330,7 +362,11 @@ class OpenRouterModel:
                         self._schema_rejected.add(model)
                         exc.retryable = True
                     if exc.retryable:
-                        self.cooldown.defer(backoff(0, exc.retry_after))
+                        self.cooldown.defer(
+                            backoff(
+                                0, exc.retry_after, rate_limited=exc.failure_class == "rate_limited"
+                            )
+                        )
                     raise
         except (TimeoutError, httpx.TimeoutException):
             self.cooldown.defer(backoff(0))

@@ -224,10 +224,15 @@ class BoundedModel:
         self._build_request = original
         adapter.build_request = configured
 
-    async def wait_ready(self):
+    async def wait_ready(self, *, deadline=None):
         wait_ready = getattr(self.adapter, "wait_ready", None)
         if wait_ready:
-            await wait_ready()
+            return await wait_ready(deadline=deadline)
+        return None
+
+    def cooldown_ready(self, ticket):
+        ready = getattr(self.adapter, "cooldown_ready", None)
+        return ready(ticket) if ready else True
 
     def model_for_role(self, role):
         return self.adapter.model_for_role(role)

@@ -7,6 +7,7 @@ accounting, failure summaries, and the preflight without live provider dependenc
 
 import asyncio
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
@@ -124,7 +125,7 @@ async def test_shared_cooldown_spaces_concurrent_attempts():
         await cooldown.wait()
         return time.monotonic() - started
 
-    first, second, third = await asyncio.gather(ready(), ready(), ready())
+    first, second, third = sorted(await asyncio.gather(ready(), ready(), ready()))
     assert first >= 0.02
     assert second - first >= 0.09
     assert third - second >= 0.09
@@ -150,7 +151,7 @@ async def test_transport_failure_is_clear_and_counted(provider, failure):
 @pytest.mark.parametrize("status", [429, 404, 503, 402])
 async def test_runtime_retry_reservations_and_call_caps(provider, tmp_path, monkeypatch, status):
     # Backoff timing itself is tested separately; this checks real runtime/guard integration.
-    monkeypatch.setattr("incident_investigator.runtime.backoff", lambda *args: 0)
+    monkeypatch.setattr("incident_investigator.runtime.backoff", lambda *args, **kwargs: 0)
     monkeypatch.setattr(ProviderCooldown, "defer", lambda *args: None)
     posts = 0
 
@@ -200,9 +201,10 @@ async def test_retry_after_cannot_exceed_remaining_run_wall_time(provider, tmp_p
     )
     result = json.loads((directory / "result.json").read_text())
     assert time.monotonic() - started < 3
-    assert result["failure_counts"]["rate_limited"] == 1
-    assert "Run wall timeout (0.4s)" in json.dumps(result)
-    assert result["failure_counts"]["timeout"] >= 1
+    assert result["failure_counts"]["rate_limited"] == 2
+    assert "cannot fit remaining run wall time" in json.dumps(result)
+    assert result["failure_counts"]["timeout"] == 0
+    assert list(result["receipts"].values())[-1]["before_send"]
 
 
 async def test_call_timeout_names_role_and_applied_limit(tmp_path):
@@ -250,7 +252,7 @@ async def test_output_cap_is_supported_and_recorded(provider):
 async def test_schema_fallback_is_a_separately_reserved_runtime_call(
     provider, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr("incident_investigator.runtime.backoff", lambda *args: 0)
+    monkeypatch.setattr("incident_investigator.runtime.backoff", lambda *args, **kwargs: 0)
     monkeypatch.setattr(ProviderCooldown, "defer", lambda *args: None)
     script = ScriptedModel(json.loads(Path("tests/scripted-paired.json").read_text())["single"])
     modes = []
@@ -449,8 +451,11 @@ async def test_queued_dispatch_observes_cooldown_set_while_waiting_for_capacity(
     completed = []
 
     class Model:
-        async def wait_ready(self):
-            await cooldown.wait()
+        async def wait_ready(self, *, deadline=None):
+            return await cooldown.wait(deadline=deadline)
+
+        def cooldown_ready(self, ticket):
+            return ticket == cooldown.revision
 
         async def complete(self, messages, schema):
             completed.append(time.monotonic())
@@ -473,3 +478,149 @@ async def test_queued_dispatch_observes_cooldown_set_while_waiting_for_capacity(
     capacity.release()
     await pending
     assert completed[0] - blocked_at >= 0.025
+
+
+def test_live_profile_uses_two_visible_retries_and_longer_rate_limit_backoff():
+    from incident_investigator.contracts import PROFILES
+
+    assert PROFILES["demo-live"].call_retries == 2
+    assert PROFILES["demo"].call_retries == 1
+    assert 4 <= backoff(0, rate_limited=True) <= 4.5
+    assert 8 <= backoff(1, rate_limited=True) <= 8.5
+    assert backoff(0, 12, rate_limited=True) == 12
+
+
+async def test_short_run_refuses_shared_cooldown_without_waiting_behind_long_run():
+    cooldown = ProviderCooldown()
+    cooldown.defer(600)
+    long_run = asyncio.create_task(cooldown.wait(deadline=time.monotonic() + 1200))
+    try:
+        await asyncio.sleep(0)
+        with pytest.raises(ModelCallError, match="cannot fit remaining run wall time") as error:
+            await asyncio.wait_for(cooldown.wait(deadline=time.monotonic() + 5), 0.2)
+        assert error.value.failure_class == "rate_limited"
+        assert error.value.before_send and not error.value.retryable
+    finally:
+        long_run.cancel()
+        await asyncio.gather(long_run, return_exceptions=True)
+
+
+async def test_cooldown_waiters_leave_global_runner_capacity_available(tmp_path):
+    from incident_investigator.models.adapter import ModelResult
+    from incident_investigator.reliability import RUNNER_CONCURRENCY
+
+    entered = 0
+    all_waiting = asyncio.Event()
+    release = asyncio.Event()
+
+    class Blocked:
+        async def wait_ready(self, *, deadline=None):
+            nonlocal entered
+            entered += 1
+            if entered == RUNNER_CONCURRENCY:
+                all_waiting.set()
+            await release.wait()
+
+        async def complete(self, messages, schema):
+            return ModelResult({}, None, 0, None)
+
+    class Healthy:
+        async def complete(self, messages, schema):
+            return ModelResult({}, None, 0, None)
+
+    runner = Investigation(
+        load_snapshot("dev-00"), Blocked(), tmp_path, Limits(), asyncio.Semaphore(4)
+    )
+    healthy = Investigation(
+        load_snapshot("dev-00"), Healthy(), tmp_path, Limits(), asyncio.Semaphore(1)
+    )
+
+    def state(index):
+        return {
+            "call": Call(
+                call_id=str(index),
+                task_id="task",
+                attempt_id="attempt",
+                role="single",
+                kind="model",
+                request={"messages": []},
+            ).model_dump()
+        }
+
+    tasks = [asyncio.create_task(runner.execute(state(i))) for i in range(RUNNER_CONCURRENCY)]
+    try:
+        await asyncio.wait_for(all_waiting.wait(), 0.5)
+        receipt = (await asyncio.wait_for(healthy.execute(state("healthy")), 0.5))["inbox"][
+            "healthy"
+        ]
+        assert receipt["error"] is None
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+
+
+async def test_expired_cooldown_stops_spacing_fresh_calls():
+    cooldown = ProviderCooldown()
+    cooldown.defer(1)
+    cooldown.until = time.monotonic() - 1
+    await cooldown.wait()
+    assert cooldown.until == 0
+    await cooldown.wait()
+    assert cooldown.until == 0
+
+
+@pytest.mark.parametrize("location", ["raw", "nested_raw", "error"])
+async def test_permanent_account_404_surfaces_upstream_detail(provider, location):
+    detail = "Function 'endpoint': Not found for account synthetic-provider-key"
+    error = {"code": 404, "message": "Provider returned error"}
+    if location == "error":
+        error["detail"] = detail
+    else:
+        raw = {"detail": detail}
+        if location == "nested_raw":
+            raw = {"error": raw}
+        error["metadata"] = {"raw": json.dumps(raw)}
+
+    adapter = OpenRouterModel(
+        transport=httpx.MockTransport(lambda r: httpx.Response(404, json={"error": error}))
+    )
+    adapter._catalog = {MODEL: INFO}
+    with pytest.raises(ModelCallError, match="Not found for account") as caught:
+        await adapter.complete(provider, {})
+    assert not caught.value.retryable
+    assert caught.value.failure_class == "provider_error"
+    assert "synthetic-provider-key" not in str(caught.value)
+    assert adapter.cooldown.until == 0
+
+
+async def test_latency_keeps_worker_waits_separate_from_provider_measurement(tmp_path):
+    from incident_investigator.models.adapter import ModelResult
+
+    class Model:
+        async def complete(self, messages, schema):
+            return ModelResult({}, None, 7.0, None)
+
+    runner = Investigation(
+        load_snapshot("dev-00"), Model(), tmp_path, Limits(), asyncio.Semaphore(1)
+    )
+    call = Call(
+        call_id="latency",
+        task_id="task",
+        attempt_id="attempt",
+        role="single",
+        kind="model",
+        request={"messages": []},
+        not_before=time.time() + 0.03,
+    )
+    receipt = (await runner.execute({"call": call.model_dump()}))["inbox"]["latency"]
+    assert receipt["latency_ms"] >= 20
+    assert receipt["provider_latency_ms"] == 7.0
+    row = json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[-1])
+    assert row["provider_latency_ms"] == 7.0
+
+
+def test_usage_documents_the_current_output_ceiling():
+    usage = Path("docs/usage.md").read_text()
+    documented = re.findall(r"[Oo]utput is capped at ([\d,]+)", usage)
+    assert len(documented) == 2
+    assert all(int(cap.replace(",", "")) == MAX_OUTPUT_TOKENS for cap in documented)

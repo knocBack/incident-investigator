@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from functools import cache, reduce
 from operator import or_
 from pathlib import Path
@@ -97,6 +98,7 @@ class Call(Record):
     retry: int = 0
     retry_of: str | None = None
     not_before: float = 0
+    retry_failure_class: str | None = None
     fault: dict[str, Any] | None = None
     query: str | None = None
 
@@ -463,6 +465,7 @@ class Investigation:
         retry_of: str | None = None,
         query: str | None = None,
         not_before: float = 0,
+        retry_failure_class: str | None = None,
     ) -> None:
         total = sum(call.kind == kind for call in c.calls.values())
         cap = c.limits.max_model_calls if kind == "model" else c.limits.max_tool_calls
@@ -523,6 +526,7 @@ class Investigation:
             retry=retry,
             retry_of=retry_of,
             not_before=not_before,
+            retry_failure_class=retry_failure_class,
             query=query,
             fault={
                 "outcome": fault.outcome,
@@ -566,9 +570,15 @@ class Investigation:
                     retry=call.retry + 1,
                     retry_of=call.call_id,
                     query=call.query,
-                    not_before=time.time() + backoff(call.retry, receipt.get("retry_after"))
+                    not_before=time.time()
+                    + backoff(
+                        call.retry,
+                        receipt.get("retry_after"),
+                        rate_limited=failure_class == "rate_limited",
+                    )
                     if call.kind == "model"
                     else 0,
+                    retry_failure_class=failure_class if call.kind == "model" else None,
                 )
                 return
             if call.kind == "model":
@@ -952,6 +962,20 @@ class Investigation:
         with self.observer.call(call) as span:
             return await self._execute(state, span)
 
+    @asynccontextmanager
+    async def call_capacity(self, call: Call):
+        wait_ready = getattr(self.model, "wait_ready", None) if call.kind == "model" else None
+        ready = getattr(self.model, "cooldown_ready", None) if call.kind == "model" else None
+        while True:
+            ticket = await wait_ready(deadline=self.deadline) if wait_ready else None
+            async with self.semaphore, runner_capacity():
+                # A new upstream error may have arrived while this call queued for
+                # capacity. Release both permits before observing the new cooldown.
+                if ready and not ready(ticket):
+                    continue
+                yield
+                return
+
     async def _execute(self, state: dict, span) -> dict:
         call = Call.model_validate(state["call"])
         started = time.monotonic()
@@ -971,12 +995,17 @@ class Investigation:
         try:
             async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
                 if call.kind == "model":
-                    await asyncio.sleep(max(0, call.not_before - time.time()))
-                async with self.semaphore, runner_capacity():
-                    if call.kind == "model":
-                        wait_ready = getattr(self.model, "wait_ready", None)
-                        if wait_ready:
-                            await wait_ready()
+                    delay = max(0, call.not_before - time.time())
+                    remaining = max(0, self.deadline - time.monotonic())
+                    if delay and delay >= remaining:
+                        raise ModelCallError(
+                            f"Retry delay ({delay:.3g}s) cannot fit remaining run wall time ({remaining:.3g}s) for role {call.role}",
+                            retryable=False,
+                            before_send=True,
+                            failure_class=call.retry_failure_class or "other",
+                        )
+                    await asyncio.sleep(delay)
+                async with self.call_capacity(call):
                     if time.monotonic() >= self.deadline:
                         raise TimeoutError("run deadline expired before dispatch")
                     timeout = min(
@@ -1052,6 +1081,7 @@ class Investigation:
             generation_id=receipt.get("raw_id"),
             finish_reason=receipt.get("finish_reason"),
             latency_ms=receipt["latency_ms"],
+            provider_latency_ms=receipt.get("provider_latency_ms"),
             outcome=receipt["error"] or "received",
             failure_class=receipt.get("failure_class"),
             retry=call.retry,

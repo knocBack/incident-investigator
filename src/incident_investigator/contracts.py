@@ -33,7 +33,7 @@ PROFILES = {
     "demo": Limits(),
     # Live providers via OpenRouter/Codex take 15-35 s per call; the wall fits one full
     # review round (plan, eight specialist turns, reasoning, critic, decide, report) at 90 s.
-    "demo-live": Limits(call_seconds=90, wall_seconds=1200, task_model_calls=8),
+    "demo-live": Limits(call_seconds=90, wall_seconds=1200, task_model_calls=8, call_retries=2),
 }
 
 
