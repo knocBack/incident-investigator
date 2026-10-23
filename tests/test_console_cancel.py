@@ -12,6 +12,16 @@ from incident_investigator.console_views import paired_metrics, present_run, sui
 from incident_investigator.storage import repositories
 
 
+@pytest.fixture(autouse=True)
+def mocked_operational_preflight(monkeypatch):
+    async def operational(self, request, repo, info):
+        return {"message": "Mocked provider preflight"}
+
+    monkeypatch.setattr(
+        "incident_investigator.console_preflight.LaunchPreflight.operational", operational
+    )
+
+
 @pytest.fixture(params=["filesystem", "memory"])
 def repo(request, tmp_path):
     return repositories(root=tmp_path / "registry", backend=request.param)

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from incident_investigator.contracts import PAYLOADS
+from incident_investigator.failures import failure_counts, run_failures
 from incident_investigator.graph_config import recorded_graph, recorded_system
 from incident_investigator.sources.loader import CaseSnapshot
 
@@ -39,6 +40,7 @@ def retain_snapshot(snapshot: CaseSnapshot, out: Path) -> None:
 
 def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
     c, inbox = state["control"], state["inbox"]
+    failures = run_failures(c, inbox)
     usage = {}
     for role in (
         ["single"]
@@ -56,6 +58,8 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         costs = [(row.get("usage") or {}).get("cost") for row in model_rows]
         usage[role] = {
             "model": c["models"].get(role, "unknown"),
+            "failures": [f for f in failures if f["role"] == role],
+            "failure_counts": failure_counts(f for f in failures if f["role"] == role),
             "cost": sum(costs) if all(cost is not None for cost in costs) else "unknown",
             "known_cost": sum(cost for cost in costs if cost is not None),
             "model_calls": sum(call["kind"] == "model" for call in calls),
@@ -97,6 +101,8 @@ def export_report(state: dict, snapshot: CaseSnapshot, out: Path) -> None:
         "models": c["models"],
         "state": c,
         "receipts": inbox,
+        "failures": failures,
+        "failure_counts": failure_counts(failures),
     }
     (out / "result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

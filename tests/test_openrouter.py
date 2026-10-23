@@ -81,7 +81,7 @@ async def test_request_modes_usage_and_generation_id(configured, monkeypatch, st
     body = json.loads(captured[1].content)
     assert body["model"] == selected
     assert "tools" not in body and "tool_choice" not in body
-    assert body["provider"] == {"require_parameters": True, "allow_fallbacks": False}
+    assert body["provider"] == {"require_parameters": True, "allow_fallbacks": True}
     assert body["response_format"]["type"] == ("json_schema" if structured else "json_object")
     if structured:
         assert body["response_format"]["json_schema"]["strict"] is True
@@ -131,7 +131,7 @@ async def test_http_failures_are_clear_redacted_and_retried_when_transient(
     assert exc.value.retryable is retryable
     assert f"OpenRouter HTTP {code}" in str(exc.value) and "provider detail" in str(exc.value)
     assert TEST_KEY not in str(exc.value)
-    assert calls == (3 if retryable else 1)
+    assert calls == 1  # Runtime retries each have their own reservation and call ID.
 
 
 async def test_embedded_429_is_retryable(configured):
@@ -160,7 +160,11 @@ async def test_429_retries_then_succeeds(configured):
             return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": {"code": 429}})
         return httpx.Response(200, json=response())
 
-    result = await OpenRouterModel(transport=httpx.MockTransport(handler)).complete(messages(), {})
+    model = OpenRouterModel(transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelCallError) as error:
+        await model.complete(messages(), {})
+    assert error.value.retry_after == 0 and calls == 1
+    result = await model.complete(messages(), {})
     assert calls == 2 and result.usage.cost == 0.001
 
 
@@ -324,7 +328,7 @@ async def test_mocked_api_investigation_records_role_models_cost_and_no_credenti
     assert len(calls) == 8
 
 
-@pytest.mark.parametrize("code,expected_calls", [(401, 2), (429, 12)])
+@pytest.mark.parametrize("code,expected_calls", [(401, 2), (429, 4)])
 async def test_runtime_owns_retry_policy_and_scrubs_provider_errors(
     configured, tmp_path, code, expected_calls
 ):
@@ -443,6 +447,9 @@ async def test_rejected_strict_schema_falls_back_to_json_mode_once(configured):
         return httpx.Response(200, json=response())
 
     model = OpenRouterModel(transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelCallError) as error:
+        await model.complete(messages(), {"type": "object"})
+    assert error.value.retryable
     first = await model.complete(messages(), {"type": "object"})
     second = await model.complete(messages(), {"type": "object"})
     assert first.action["action"]["kind"] == second.action["action"]["kind"] == "final"
@@ -450,7 +457,7 @@ async def test_rejected_strict_schema_falls_back_to_json_mode_once(configured):
     assert modes == ["json_schema", "json_object", "json_object"]
 
 
-async def test_failed_json_fallback_does_not_disable_strict_mode(configured):
+async def test_generic_bad_request_does_not_disable_strict_mode(configured):
     modes = []
 
     def handler(request):
@@ -458,7 +465,7 @@ async def test_failed_json_fallback_does_not_disable_strict_mode(configured):
             return httpx.Response(200, json=catalogue())
         mode = json.loads(request.content)["response_format"]["type"]
         modes.append(mode)
-        if len(modes) <= 2:
+        if len(modes) == 1:
             return httpx.Response(400, json={"error": {"code": 400}})
         return httpx.Response(200, json=response())
 
@@ -466,7 +473,7 @@ async def test_failed_json_fallback_does_not_disable_strict_mode(configured):
     with pytest.raises(ModelCallError):
         await model.complete(messages(), {})
     await model.complete(messages(), {})
-    assert modes == ["json_schema", "json_object", "json_schema"]
+    assert modes == ["json_schema", "json_schema"]
 
 
 @pytest.mark.parametrize(

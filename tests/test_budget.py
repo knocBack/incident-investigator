@@ -108,7 +108,7 @@ async def test_two_concurrent_calls_never_exceed_cap(monkeypatch):
         assert real_spend <= guard.cap
         return httpx.Response(200, json=completion(0.00014))
 
-    model, guard = bounded(monkeypatch, handler, cap=".022")
+    model, guard = bounded(monkeypatch, handler, cap=".080")
     tasks = [asyncio.create_task(model.complete([], {})) for _ in range(2)]
     try:
         await asyncio.wait_for(both_entered.wait(), timeout=2)

@@ -30,6 +30,7 @@ class ModelResult:
     raw_id: str | None
     model: str | None = None
     finish_reason: str | None = None
+    output_limit: int | None = None
 
 
 class ModelCallError(RuntimeError):
@@ -43,12 +44,16 @@ class ModelCallError(RuntimeError):
         status: int | None = None,
         before_response: bool = False,
         before_send: bool = False,
+        failure_class: str = "other",
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
         self.before_response = before_response
         self.before_send = before_send
+        self.failure_class = failure_class
+        self.retry_after = retry_after
 
 
 class ModelAdapter(Protocol):

@@ -665,6 +665,7 @@ async def test_cancelled_unbilled_release_preserves_cancellation_and_zero_charge
     assert run.records[0]["cost"] == "unbilled_failure"
 
 
+@pytest.mark.usefixtures("mock_suite_preflight")
 async def test_suite_timeout_propagates_to_runtime_adapter_and_manifest(tmp_path, monkeypatch):
     from dataclasses import replace
 

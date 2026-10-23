@@ -386,9 +386,12 @@ async def test_guarded_adapter_enforces_ceiling_and_retains_error_reservation():
     with pytest.raises(TimeoutError):
         await bounded.complete([], {})
     assert guard.unknown == Decimal(guard.records[0]["reservation"])
-    assert guard.unknown < price_bound(next(iter(catalog.values())))
+    assert guard.unknown < price_bound(
+        next(iter(catalog.values())), output_tokens=request["max_tokens"]
+    )
 
 
+@pytest.mark.usefixtures("mock_suite_preflight")
 async def test_usage_sampling_and_zero_budget_free_model(tmp_path, monkeypatch):
     import json
 
@@ -555,6 +558,7 @@ async def test_returned_cost_over_reservation_fences_later_calls():
         await guard.reserve(Decimal(0))
 
 
+@pytest.mark.usefixtures("mock_suite_preflight")
 async def test_suite_stops_launching_when_price_reservation_exceeds_cap(tmp_path, monkeypatch):
     import httpx
 
@@ -596,6 +600,7 @@ async def test_suite_stops_launching_when_price_reservation_exceeds_cap(tmp_path
     assert (args.out / "budget-stop.json").exists()
 
 
+@pytest.mark.usefixtures("mock_suite_preflight")
 async def test_suite_skips_unaffordable_model_and_runs_later_model(tmp_path, monkeypatch):
     import json
 

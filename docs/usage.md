@@ -136,3 +136,15 @@ uv run ruff format --check .
 ```
 
 Live provider tests are opt-in and skipped by default. The normal suite uses scripted or mocked adapters. Follow the accepted [evaluation plan](evaluation-plan.md) when maintaining evaluator fixtures and keep them separate from runtime-visible evidence.
+
+Provider retries use the run's `call_retries`, model-call allowances, and remaining wall time.
+Each retry (including JSON-mode fallback after schema rejection) is a visible call with its
+own budget reservation. OpenRouter requests allow provider fallback within the selected
+model and use an output ceiling of 16,384 tokens (lower when the catalogue requires it).
+429 and transient upstream failures use Retry-After or exponential backoff with jitter;
+concurrent suite attempts share a cooldown. Tool retries retain their existing policy.
+Results and suite leaderboards count `rate_limited`, `provider_error`, `timeout`,
+`output_truncated`, `budget_censored`, and `other` events, including recovered failures.
+Paid suite preflight checks key reachability, remaining key credit versus the suite cap,
+model availability, and at least 3 GiB free disk. Insufficient or unrestricted key credit
+produces a warning; the existing spend guard still controls every request.

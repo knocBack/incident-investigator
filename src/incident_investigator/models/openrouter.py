@@ -10,6 +10,8 @@ import random
 import re
 import time
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -19,6 +21,51 @@ from incident_investigator.models.adapter import ModelCallError, ModelResult, Mo
 
 BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+
+
+# Keep the rendered request and spend reservation on the same output ceiling.
+MAX_OUTPUT_TOKENS = 16384
+
+
+def output_limit(info):
+    cap = info.get("top_provider", {}).get("max_completion_tokens")
+    return min(MAX_OUTPUT_TOKENS, cap) if isinstance(cap, int) and cap > 0 else MAX_OUTPUT_TOKENS
+
+
+def retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return max(0.0, seconds) if math.isfinite(seconds) else None
+
+
+def backoff(retry: int, retry_after: float | None = None) -> float:
+    return max(retry_after or 0, min(30.0, 2.0**retry) + random.uniform(0, 0.5))
+
+
+class ProviderCooldown:
+    """One suite-local cooldown; serialize wakeups after upstream congestion."""
+
+    def __init__(self):
+        self.until = 0.0
+        self._lock = asyncio.Lock()
+
+    def defer(self, seconds: float):
+        self.until = max(self.until, time.monotonic() + seconds)
+
+    async def wait(self):
+        async with self._lock:
+            while self.until > time.monotonic():
+                await asyncio.sleep(self.until - time.monotonic())
+            # Space queued attempts after a cooldown rather than waking them together.
+            if self.until:
+                self.until = time.monotonic() + 0.1 + random.uniform(0, 0.15)
 
 
 def _role(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -42,6 +89,7 @@ class OpenRouterModel:
         *,
         timeout_seconds: float = PROFILES["demo-live"].call_seconds,
         transport: httpx.AsyncBaseTransport | None = None,
+        cooldown: ProviderCooldown | None = None,
     ) -> None:
         self._key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not self._key:
@@ -63,6 +111,10 @@ class OpenRouterModel:
         self._catalog: dict[str, dict[str, Any]] | None = None
         self._catalog_lock = asyncio.Lock()
         self._schema_rejected: set[str] = set()
+        self.cooldown = cooldown or ProviderCooldown()
+
+    async def wait_ready(self):
+        await self.cooldown.wait()
 
     def model_for_role(self, role: str) -> str:
         return self._models[role]
@@ -100,14 +152,52 @@ class OpenRouterModel:
                 402: "insufficient credits",
                 429: "rate limited",
             }.get(status, "request failed")
+            lower = message.lower()
+            permanent = status in {401, 402, 403} or any(
+                text in lower
+                for text in (
+                    "unknown model",
+                    "invalid model",
+                    "not a valid model",
+                    "model not found",
+                    "does not exist",
+                )
+            )
+            transient = not permanent and (
+                status in {408, 429}
+                or status >= 500
+                or (
+                    status == 404
+                    and any(
+                        text in lower for text in ("provider returned error", "no endpoints found")
+                    )
+                )
+                or any(
+                    text in lower
+                    for text in ("overloaded", "temporarily unavailable", "connection reset")
+                )
+            )
+            failure_class = (
+                "rate_limited"
+                if status == 429
+                else "timeout"
+                if status == 408
+                else "provider_error"
+            )
             raise ModelCallError(
                 f"OpenRouter HTTP {status} ({label}): {message}",
-                retryable=status in {408, 429} or status >= 500,
+                retryable=transient,
+                failure_class=failure_class,
+                retry_after=retry_after_seconds(response.headers.get("Retry-After")),
                 status=status,
                 before_response=True,
             )
         if not isinstance(body, dict):
-            raise ModelCallError("OpenRouter returned an invalid response envelope", retryable=True)
+            raise ModelCallError(
+                "OpenRouter returned an invalid response envelope",
+                retryable=True,
+                failure_class="provider_error",
+            )
         return body
 
     async def _model_info(self, client: httpx.AsyncClient, model: str) -> dict:
@@ -118,7 +208,10 @@ class OpenRouterModel:
                 entries = body.get("data")
                 if not isinstance(entries, list):
                     raise ModelCallError(
-                        "OpenRouter returned an invalid model catalogue", retryable=True
+                        "OpenRouter returned an invalid model catalogue",
+                        retryable=True,
+                        before_send=True,
+                        failure_class="provider_error",
                     )
                 self._catalog = {
                     m["id"]: m
@@ -127,7 +220,12 @@ class OpenRouterModel:
                 }
         info = self._catalog.get(model)
         if info is None:
-            raise ModelCallError(f"Unknown OpenRouter model: {model}", retryable=False)
+            raise ModelCallError(
+                f"Unknown OpenRouter model: {model}",
+                retryable=False,
+                before_send=True,
+                failure_class="provider_error",
+            )
         if self._free_only:
             pricing = info.get("pricing", {})
             if (
@@ -136,7 +234,10 @@ class OpenRouterModel:
                 or str(pricing.get("completion")) != "0"
             ):
                 raise ModelCallError(
-                    "OpenRouter free-only mode refused a non-free model", retryable=False
+                    "OpenRouter free-only mode refused a non-free model",
+                    retryable=False,
+                    before_send=True,
+                    failure_class="provider_error",
                 )
         return info
 
@@ -169,8 +270,8 @@ class OpenRouterModel:
             "response_format": response_format,
             "stream": False,
             "usage": {"include": True},
-            "max_tokens": 4096,
-            "provider": {"require_parameters": True, "allow_fallbacks": False},
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "provider": {"require_parameters": True, "allow_fallbacks": True},
         }
 
     async def complete(self, messages: Sequence[Mapping[str, Any]], schema: dict) -> ModelResult:
@@ -202,51 +303,48 @@ class OpenRouterModel:
                         and reasoning.get("mandatory") is False
                     ):
                         request["reasoning"] = {"enabled": False}
-                    for attempt in range(3):
-                        async with client.stream(
-                            "POST",
-                            f"{BASE_URL}/chat/completions",
-                            headers={"Authorization": f"Bearer {self._key}"},
-                            json=request,
-                        ) as response:
-                            # A timeout before headers is unbilled. Once a successful
-                            # response starts, an interrupted body may still be billed.
-                            received_response = response.is_success
-                            await response.aread()
-                        try:
-                            return self._response(response)
-                        except ModelCallError as exc:
-                            if exc.status not in {429} and not (exc.status and exc.status >= 500):
-                                raise
-                            if attempt == 2:
-                                raise
-                            retry_after = response.headers.get("Retry-After")
-                            try:
-                                delay = max(0.0, float(retry_after)) if retry_after else 0.0
-                            except ValueError:
-                                delay = 0.0
-                            await asyncio.sleep(
-                                max(delay, 0.25 * (2**attempt) + random.uniform(0, 0.1))
-                            )
+                    request["max_tokens"] = output_limit(info)
+                    async with client.stream(
+                        "POST",
+                        f"{BASE_URL}/chat/completions",
+                        headers={"Authorization": f"Bearer {self._key}"},
+                        json=request,
+                    ) as response:
+                        received_response = response.is_success
+                        await response.aread()
+                    return self._response(response)
 
                 try:
                     body = await post(structured)
                 except ModelCallError as exc:
-                    if not structured or exc.status != 400:
-                        raise
-                    # Providers may reject a large strict schema (complexity limits). JSON mode
-                    # keeps the same runtime validation; remember it for this model and run.
-                    body = await post(False)
-                    self._schema_rejected.add(model)
+                    if (
+                        structured
+                        and exc.status == 400
+                        and any(
+                            word in str(exc).lower()
+                            for word in ("schema", "structured", "response_format")
+                        )
+                    ):
+                        # The next runtime call uses JSON mode, with its own allowance
+                        # and reservation. Never hide a second POST in this call.
+                        self._schema_rejected.add(model)
+                        exc.retryable = True
+                    if exc.retryable:
+                        self.cooldown.defer(backoff(0, exc.retry_after))
+                    raise
         except (TimeoutError, httpx.TimeoutException):
+            self.cooldown.defer(backoff(0))
             raise ModelCallError(
-                "OpenRouter request timed out",
+                f"OpenRouter model call timed out after {self.timeout_seconds:g}s for role {_role(messages)}",
+                failure_class="timeout",
                 retryable=True,
                 before_response=not received_response,
             ) from None
         except httpx.HTTPError as exc:
+            self.cooldown.defer(backoff(0))
             raise ModelCallError(
-                f"OpenRouter transport failure: {type(exc).__name__}",
+                f"OpenRouter transport failure for role {_role(messages)}: {type(exc).__name__}",
+                failure_class="provider_error",
                 retryable=True,
                 before_response=not received_response,
             ) from None
@@ -273,7 +371,11 @@ class OpenRouterModel:
             or not isinstance(choices[0], dict)
             or not isinstance(choices[0].get("message"), dict)
         ):
-            raise ModelCallError("OpenRouter returned an invalid response message", retryable=True)
+            raise ModelCallError(
+                "OpenRouter returned an invalid response message",
+                retryable=True,
+                failure_class="provider_error",
+            )
         message = choices[0]["message"]
         content = self._redact(str(message.get("content") or ""))
         try:
@@ -286,6 +388,7 @@ class OpenRouterModel:
         action = json.loads(self._redact(json.dumps(action)))
         return ModelResult(
             action=action,
+            output_limit=output_limit(info),
             usage=ModelUsage(
                 measured("prompt_tokens", integer=True),
                 measured("completion_tokens", integer=True),

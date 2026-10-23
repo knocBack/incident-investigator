@@ -16,6 +16,16 @@ from incident_investigator.runtime import investigate
 from incident_investigator.storage import repositories
 
 
+@pytest.fixture(autouse=True)
+def mocked_operational_preflight(monkeypatch):
+    async def operational(self, request, repo, info):
+        return {"message": "Mocked provider preflight"}
+
+    monkeypatch.setattr(
+        "incident_investigator.console_preflight.LaunchPreflight.operational", operational
+    )
+
+
 @pytest.fixture(params=["filesystem", "memory"])
 def repo(request, tmp_path):
     return repositories(root=tmp_path / "home", backend=request.param)
@@ -191,6 +201,7 @@ def test_all_skipped_job_explains_the_stop_and_links_to_comparison(repo, tmp_pat
         assert f"/suites/{result['suites'][0]['id']}" in page
 
 
+@pytest.mark.usefixtures("mock_suite_preflight")
 async def test_suite_prints_skips_and_retains_the_empty_result(tmp_path, monkeypatch, capsys):
     from incident_investigator.grading import suite
 
