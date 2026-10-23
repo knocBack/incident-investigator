@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from functools import cache, reduce
 from operator import or_
 from pathlib import Path
@@ -28,6 +29,7 @@ from incident_investigator.contracts import (
 )
 from incident_investigator.graph_config import DEFAULT_GRAPH, GraphVariant
 from incident_investigator.models import CodexExecModel, ModelAdapter, ModelCallError, ScriptedModel
+from incident_investigator.models.openrouter import backoff
 from incident_investigator.reliability import (
     invocation_lock,
     resume_metadata,
@@ -77,6 +79,8 @@ class Task(Record):
     requests: list[dict[str, Any]] = Field(default_factory=list)
     result: dict[str, Any] | None = None
     failure: str | None = None
+    failure_class: str | None = None
+    failures: list[dict[str, Any]] = Field(default_factory=list)
     model_calls: int = 0
     tool_calls: int = 0
     corrections: int = 0
@@ -93,6 +97,8 @@ class Call(Record):
     invocation_id: str | None = None
     retry: int = 0
     retry_of: str | None = None
+    not_before: float = 0
+    retry_failure_class: str | None = None
     fault: dict[str, Any] | None = None
     query: str | None = None
 
@@ -362,6 +368,7 @@ class Investigation:
         for task in control.tasks.values():
             if task.status == "running":
                 task.status, task.phase, task.failure = "failed", "settled", reason
+                task.failure_class = "timeout" if "wall timeout" in reason.lower() else "other"
         for key in control.objections:
             if control.dispositions.get(key, {}).get("outcome") != "unresolved":
                 control.dispositions[key] = {
@@ -457,6 +464,8 @@ class Investigation:
         retry: int = 0,
         retry_of: str | None = None,
         query: str | None = None,
+        not_before: float = 0,
+        retry_failure_class: str | None = None,
     ) -> None:
         total = sum(call.kind == kind for call in c.calls.values())
         cap = c.limits.max_model_calls if kind == "model" else c.limits.max_tool_calls
@@ -469,12 +478,18 @@ class Investigation:
             else c.limits.task_tool_calls
         )
         if time.monotonic() >= self.deadline or total >= cap:
-            self.close(c, "resource_exhausted", f"{kind} call or wall time limit")
+            reason = (
+                f"Run wall timeout ({self.limits.wall_seconds:g}s) for role {task.role}"
+                if time.monotonic() >= self.deadline
+                else f"{kind} call allowance ({cap}) exhausted for role {task.role}"
+            )
+            self.close(c, "resource_exhausted", reason)
             return
         if count >= task_cap:
             # A task allowance settles only that task; its batch still reaches Reasoning.
             task.status, task.phase = "failed", "settled"
-            task.failure = f"task {kind}-call allowance ({task_cap}) exhausted"
+            task.failure = f"task {kind}-call allowance ({task_cap}) exhausted for role {task.role}"
+            task.failure_class = "other"
             return
         if kind == "model":
             tool_total = sum(call.kind == "tool" for call in c.calls.values())
@@ -510,6 +525,8 @@ class Investigation:
             invocation_id=self.invocation_id,
             retry=retry,
             retry_of=retry_of,
+            not_before=not_before,
+            retry_failure_class=retry_failure_class,
             query=query,
             fault={
                 "outcome": fault.outcome,
@@ -534,6 +551,16 @@ class Investigation:
             # Unknown prior execution retains its charge; a successor is a new attempt.
             task.attempt_id = identity()
         if receipt.get("error"):
+            failure_class = receipt.get("failure_class", "other")
+            task.failures.append(
+                {
+                    "class": failure_class,
+                    "message": receipt["error"],
+                    "call_id": call.call_id,
+                    "kind": call.kind,
+                    "role": task.role,
+                }
+            )
             if call.retry < c.limits.call_retries and receipt.get("retryable", True):
                 self.admit(
                     c,
@@ -543,10 +570,20 @@ class Investigation:
                     retry=call.retry + 1,
                     retry_of=call.call_id,
                     query=call.query,
+                    not_before=time.time()
+                    + backoff(
+                        call.retry,
+                        receipt.get("retry_after"),
+                        rate_limited=failure_class == "rate_limited",
+                    )
+                    if call.kind == "model"
+                    else 0,
+                    retry_failure_class=failure_class if call.kind == "model" else None,
                 )
                 return
             if call.kind == "model":
                 task.status, task.phase, task.failure = "failed", "settled", receipt["error"]
+                task.failure_class = failure_class
                 return
         if call.kind == "tool":
             payload = receipt.get("payload")
@@ -599,6 +636,16 @@ class Investigation:
             if not task.pending:
                 task.phase = "model"
             return
+        if receipt.get("finish_reason") == "length":
+            task.failures.append(
+                {
+                    "class": "output_truncated",
+                    "message": f"Output truncated for role {task.role} at {receipt.get('output_limit') or 'provider'} tokens",
+                    "call_id": call.call_id,
+                    "kind": "model",
+                    "role": task.role,
+                }
+            )
         action = receipt["payload"]
         task.messages.append({"role": "assistant", "content": json.dumps(action)})
         repairs = Repairs()
@@ -700,6 +747,9 @@ class Investigation:
                     "output_truncated"
                     if receipt.get("finish_reason") == "length"
                     else f"invalid output: {error}",
+                )
+                task.failure_class = (
+                    "output_truncated" if receipt.get("finish_reason") == "length" else "other"
                 )
 
     def report(self, c: Control, partial_reason: str | None = None) -> None:
@@ -859,7 +909,11 @@ class Investigation:
             if c.status == "running":
                 self.accept(c, c.calls[call_id], receipt)
         if c.status == "running" and time.monotonic() >= self.deadline:
-            self.close(c, "resource_exhausted", "wall time limit")
+            self.close(
+                c,
+                "resource_exhausted",
+                f"Run wall timeout ({self.limits.wall_seconds:g}s); roles: {', '.join(sorted({task.role for task in c.tasks.values() if task.status == 'running'})) or 'runtime'}",
+            )
         return c
 
     def schedule(self, c: Control) -> None:
@@ -908,6 +962,20 @@ class Investigation:
         with self.observer.call(call) as span:
             return await self._execute(state, span)
 
+    @asynccontextmanager
+    async def call_capacity(self, call: Call):
+        wait_ready = getattr(self.model, "wait_ready", None) if call.kind == "model" else None
+        ready = getattr(self.model, "cooldown_ready", None) if call.kind == "model" else None
+        while True:
+            ticket = await wait_ready(deadline=self.deadline) if wait_ready else None
+            async with self.semaphore, runner_capacity():
+                # A new upstream error may have arrived while this call queued for
+                # capacity. Release both permits before observing the new cooldown.
+                if ready and not ready(ticket):
+                    continue
+                yield
+                return
+
     async def _execute(self, state: dict, span) -> dict:
         call = Call.model_validate(state["call"])
         started = time.monotonic()
@@ -922,15 +990,29 @@ class Investigation:
                 if isinstance(self.model, ScriptedModel)
                 else type(self.model).__name__,
             )
+        timeout = self.limits.call_seconds
+        dispatched = False
         try:
             async with asyncio.timeout(max(0.001, self.deadline - time.monotonic())):
-                async with self.semaphore, runner_capacity():
+                if call.kind == "model":
+                    delay = max(0, call.not_before - time.time())
+                    remaining = max(0, self.deadline - time.monotonic())
+                    if delay and delay >= remaining:
+                        raise ModelCallError(
+                            f"Retry delay ({delay:.3g}s) cannot fit remaining run wall time ({remaining:.3g}s) for role {call.role}",
+                            retryable=False,
+                            before_send=True,
+                            failure_class=call.retry_failure_class or "other",
+                        )
+                    await asyncio.sleep(delay)
+                async with self.call_capacity(call):
                     if time.monotonic() >= self.deadline:
                         raise TimeoutError("run deadline expired before dispatch")
                     timeout = min(
                         self.limits.call_seconds, max(0.001, self.deadline - time.monotonic())
                     )
                     async with asyncio.timeout(timeout):
+                        dispatched = True
                         if call.kind == "model":
                             messages, schema = model_input(call.role, call.request)
                             self.observer.input(span, messages)
@@ -939,6 +1021,9 @@ class Investigation:
                             receipt["raw_id"] = result.raw_id
                             receipt["model"] = result.model
                             receipt["finish_reason"] = result.finish_reason
+                            receipt["output_limit"] = result.output_limit
+                            if result.finish_reason == "length":
+                                receipt["failure_class"] = "output_truncated"
                             receipt["provider_latency_ms"] = result.latency_ms
                             if result.usage:
                                 receipt["usage"] = {
@@ -964,7 +1049,21 @@ class Investigation:
                                 )
                                 receipt["retryable"] = page.error.retryable if page.error else True
         except Exception as exc:
-            receipt["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, TimeoutError):
+                run_timeout = time.monotonic() >= self.deadline
+                detail = (
+                    f"Run wall timeout ({self.limits.wall_seconds:g}s)"
+                    if run_timeout
+                    else f"{call.kind.title()} call timeout ({timeout:g}s)"
+                )
+                receipt["error"] = (
+                    f"TimeoutError: {detail} for role {call.role} ({'dispatched' if dispatched else 'waiting before dispatch'})"
+                )
+                receipt["failure_class"] = "timeout"
+            else:
+                receipt["error"] = f"{type(exc).__name__}: {exc}"
+                receipt["failure_class"] = getattr(exc, "failure_class", "other")
+            receipt["retry_after"] = getattr(exc, "retry_after", None)
             receipt["retryable"] = getattr(exc, "retryable", True)
             if call.kind == "model" and isinstance(exc, ModelCallError) and exc.before_send:
                 receipt["before_send"] = True
@@ -982,7 +1081,12 @@ class Investigation:
             generation_id=receipt.get("raw_id"),
             finish_reason=receipt.get("finish_reason"),
             latency_ms=receipt["latency_ms"],
+            provider_latency_ms=receipt.get("provider_latency_ms"),
             outcome=receipt["error"] or "received",
+            failure_class=receipt.get("failure_class"),
+            retry=call.retry,
+            retry_of=call.retry_of,
+            output_limit=receipt.get("output_limit"),
         )
         return {"inbox": {call.call_id: receipt}}
 

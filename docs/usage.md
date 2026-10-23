@@ -92,7 +92,7 @@ This command can incur provider charges and was not executed for this documentat
 
 Optional role overrides use `II_OPENROUTER_MODEL_ORCHESTRATOR`, `II_OPENROUTER_MODEL_OBSERVABILITY`, `II_OPENROUTER_MODEL_DEPENDENCY`, `II_OPENROUTER_MODEL_REASONING`, `II_OPENROUTER_MODEL_CRITIC` and `II_OPENROUTER_MODEL_REPORTING`. Use one model across roles and systems for a fair comparison. `II_OPENROUTER_FREE_ONLY=1` requires zero catalog token prices and a free-suffixed model before completion calls; provider rate limits still apply.
 
-The adapter fetches a public model catalog, requests strict schema output when supported and falls back to JSON mode if a provider rejects that schema. Runtime validation applies to both. Models propose JSON tool requests; no native callable tools are sent to the provider. Output is capped at 4,096 tokens. Authentication/credit errors are nonretryable; rate limits can retry within runtime bounds. There are no hidden HTTP retries or automatic model substitutions.
+The adapter fetches a public model catalog, requests strict schema output when supported and falls back to JSON mode if a provider rejects that schema. Runtime validation applies to both. Models propose JSON tool requests; no native callable tools are sent to the provider. Output is capped at 16,384 tokens (lower when the catalogue requires it). Authentication/credit errors are nonretryable; rate limits can retry within runtime bounds. There are no hidden HTTP retries or automatic model substitutions.
 
 `--model codex` uses a locally authenticated CLI adapter. It disables ordinary shell/image/search features, uses an empty working directory and checks the event stream for tool execution. A read-only process sandbox does not prevent filesystem reads; this is not an OS confidentiality boundary. Evaluator material must remain inaccessible to model processes. Runtime prompts never include design documents or expected answers.
 
@@ -111,7 +111,7 @@ uv run incident-investigator eval-suite --model scripted --models scripted \
 
 `--k` sets the pass@k/pass^k cap (default four). Effective k is clamped to the observed attempts in each fault/model/workflow group. Grades, rubric worksheets, `leaderboard.json` and `leaderboard.md` retain outcomes and resources. See [evaluation](evaluation.md) for definitions and limitations.
 
-For OpenRouter use `--model openrouter --models` with available complete model IDs, and set an explicit `--budget-usd`. The suite guard samples key usage, reserves conservative input/output costs before calls and refuses oversize prompts before sending. `--max-input-tokens` defaults to 64,000; output is capped at 4,096. Known billed costs settle reserves; unknown responses/timeouts retain them unless reconciled. Unsupported billing dimensions or insufficient capacity produce recorded skips. Inspect `budget.json`, batch settings and skipped entries. Demo/investigate have execution bounds but do not use this suite monetary guard.
+For OpenRouter use `--model openrouter --models` with available complete model IDs, and set an explicit `--budget-usd`. The suite guard samples key usage, reserves conservative input/output costs before calls and refuses oversize prompts before sending. `--max-input-tokens` defaults to 64,000; output is capped at 16,384 (lower when the catalogue requires it). Known billed costs settle reserves; unknown responses/timeouts retain them unless reconciled. Unsupported billing dimensions or insufficient capacity produce recorded skips. Inspect `budget.json`, batch settings and skipped entries. Demo/investigate have execution bounds but do not use this suite monetary guard.
 
 Unknown tokens and cost remain unknown; known subtotals are available separately in raw JSON. Wall time is distinct from summed role durations. Lexical correctness and valid citations require human semantic review. No comparison result or acceptance threshold is implied by a successful CLI exit.
 
@@ -136,3 +136,24 @@ uv run ruff format --check .
 ```
 
 Live provider tests are opt-in and skipped by default. The normal suite uses scripted or mocked adapters. Follow the accepted [evaluation plan](evaluation-plan.md) when maintaining evaluator fixtures and keep them separate from runtime-visible evidence.
+
+Provider retries use the run's `call_retries`, model-call allowances, and remaining wall time.
+Each retry (including JSON-mode fallback after schema rejection) is a visible call with its
+own budget reservation. OpenRouter requests allow provider fallback within the selected
+model and use an output ceiling of 16,384 tokens (lower when the catalogue requires it).
+The demo-live profile permits two retries, within the unchanged role/run call allowances.
+429 and transient upstream failures use Retry-After or exponential backoff with jitter;
+429 without Retry-After waits at least 4 seconds, then 8 seconds. A retry delay or shared
+cooldown that cannot fit the remaining run wall time fails immediately, retaining the
+failure class (rate_limited for a shared cooldown), instead of sleeping until timeout.
+Concurrent suite attempts share a cooldown. Tool retries retain their existing policy.
+Results and suite leaderboards count `rate_limited`, `provider_error`, `timeout`,
+`output_truncated`, `budget_censored`, and `other` events, including recovered failures.
+Paid suite preflight checks key reachability, remaining key credit versus the suite cap,
+model availability, and at least 3 GiB free disk. Insufficient or unrestricted key credit
+produces a warning; the existing spend guard still controls every request.
+
+Receipt and trace `latency_ms` measure total call-worker elapsed time, including capacity
+queues, retry backoff and cooldown waits. `provider_latency_ms` is the adapter's measured
+request duration (including metadata lookup when needed), excluding runtime queue/backoff
+waits; it is unavailable for failed requests. Run wall time includes all of these waits.

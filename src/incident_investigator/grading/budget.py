@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from incident_investigator.models import ModelCallError
 from incident_investigator.models.adapter import ModelUsage
-from incident_investigator.models.openrouter import _role
+from incident_investigator.models.openrouter import _role, output_limit
 
 D = Decimal
 
@@ -46,7 +46,10 @@ class SpendGuard:
         async with self.lock:
             if not self.launch_allowed(bound):
                 raise ModelCallError(
-                    "suite budget reservation refused call", retryable=False, before_send=True
+                    "suite budget reservation refused call",
+                    retryable=False,
+                    before_send=True,
+                    failure_class="budget_censored",
                 )
             ident = str(uuid4())
             self.active[ident] = bound
@@ -206,10 +209,10 @@ class BoundedModel:
         if self.max_input_tokens < 1:
             raise ValueError("max input tokens must be positive")
         original = adapter.build_request
-        self._build_request = original
 
         def configured(messages, schema, model, *, structured):
             request = original(messages, schema, model, structured=structured)
+            request["max_tokens"] = output_limit(catalog[model])
             pricing = catalog[model]["pricing"]
             request["provider"]["max_price"] = {
                 "prompt": float(amount(pricing["prompt"]) * 1_000_000),
@@ -218,7 +221,18 @@ class BoundedModel:
             }
             return request
 
+        self._build_request = original
         adapter.build_request = configured
+
+    async def wait_ready(self, *, deadline=None):
+        wait_ready = getattr(self.adapter, "wait_ready", None)
+        if wait_ready:
+            return await wait_ready(deadline=deadline)
+        return None
+
+    def cooldown_ready(self, ticket):
+        ready = getattr(self.adapter, "cooldown_ready", None)
+        return ready(ticket) if ready else True
 
     def model_for_role(self, role):
         return self.adapter.model_for_role(role)
@@ -237,7 +251,7 @@ class BoundedModel:
             raise ModelCallError(
                 "suite input token limit refused call", retryable=False, before_send=True
             )
-        output_tokens = int(preview.get("max_tokens", 4096))
+        output_tokens = min(int(preview.get("max_tokens", 4096)), output_limit(info))
         ident = await self.guard.reserve(
             price_bound(
                 self.catalog[model],

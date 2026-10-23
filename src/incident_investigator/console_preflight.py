@@ -10,6 +10,8 @@ import httpx
 
 from incident_investigator.grading.budget import amount, estimated_input_tokens, price_bound
 from incident_investigator.models import OpenRouterModel, ScriptedModel
+from incident_investigator.models.openrouter import output_limit
+from incident_investigator.preflight import suite_preflight
 from incident_investigator.runtime import Control, Investigation, model_input
 
 
@@ -29,6 +31,17 @@ class LaunchPreflight:
                     self._catalog = {m["id"]: m for m in response.json()["data"]}
                     self._loaded = monotonic()
         return self._catalog
+
+    async def operational(self, request, repo, info):
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            return await suite_preflight(
+                client,
+                [request.model_id],
+                {request.model_id: info},
+                request.budget_usd,
+                repo.execution_root or Path(gettempdir()),
+                paid=not request.model_id.endswith(":free"),
+            )
 
     async def check(self, request, repo):
         if request.provider != "openrouter" or request.command == "eval":
@@ -83,6 +96,7 @@ class LaunchPreflight:
                         request.model_id,
                         structured="structured_outputs" in info.get("supported_parameters", []),
                     )
+                    rendered["max_tokens"] = output_limit(info)
                     tokens = estimated_input_tokens(rendered)
                     if tokens > request.max_input_tokens:
                         raise ValueError(
@@ -122,7 +136,21 @@ class LaunchPreflight:
         run_guide = (bound * limits.max_model_calls).quantize(
             amount("0.01"), rounding="ROUND_CEILING"
         )
+        operational = {}
+        if request.command == "eval-suite" and not blocked:
+            try:
+                operational = await self.operational(request, repo, info)
+            except (httpx.HTTPError, ValueError) as exc:
+                return {
+                    "launch_allowed": False,
+                    "estimated_call_reservation": str(bound),
+                    "message": str(exc)
+                    if isinstance(exc, ValueError)
+                    else "Preflight: provider key check unavailable",
+                    "blocked_fields": [],
+                }
         return {
+            "preflight": operational,
             "launch_allowed": not blocked,
             "estimated_call_reservation": str(bound),
             "minimum_cap": str(suggested),
@@ -138,5 +166,6 @@ class LaunchPreflight:
             ),
             "message": f"Raise {' and '.join(blocked)} to at least USD {suggested:.2f} to fit an initial call. Budget for several calls per run."
             if blocked
-            else "Initial calls fit the caps. Later calls may need larger reservations.",
+            else "Initial calls fit the caps. Later calls may need larger reservations. "
+            + operational.get("message", ""),
         }

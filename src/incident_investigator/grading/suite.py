@@ -16,6 +16,7 @@ from uuid import uuid4
 import httpx
 
 from incident_investigator.contracts import PROFILES
+from incident_investigator.failures import failure_counts
 from incident_investigator.grading.budget import (
     BoundedModel,
     RunSpendGuard,
@@ -38,6 +39,8 @@ from incident_investigator.graph_config import (
     recorded_system,
 )
 from incident_investigator.lab.cases import SECOND_CASES, VARIANTS
+from incident_investigator.models.openrouter import ProviderCooldown, output_limit
+from incident_investigator.preflight import disk_check, key_info, suite_preflight
 from incident_investigator.workspace import batch_output
 
 
@@ -109,6 +112,7 @@ def _fault_metrics(items, k):
             "grounding_measured": grounding_measured,
             "grounding_total": n,
             "execution_failures": _execution_failures(group),
+            "failure_counts": failure_counts(f for g in group for f in g.get("failures", [])),
             "verdicts": dict(Counter(g["verdict"] for g in group)),
             "resources": {
                 field: measured_sum(g["resources"]["totals"].get(field) for g in group)
@@ -181,6 +185,7 @@ def leaderboard(grades, out, skipped=(), k=4):
                 if measured_sum(walls) is not None
                 else None,
                 "execution_failures": _execution_failures(items),
+                "failure_counts": failure_counts(f for g in items for f in g.get("failures", [])),
                 "faults": _fault_metrics(items, k),
             }
         )
@@ -191,6 +196,10 @@ def leaderboard(grades, out, skipped=(), k=4):
         "models": rows,
         "runs": grades,
         "skipped": list(skipped),
+        "failure_counts": failure_counts(
+            [f for g in grades for f in g.get("failures", [])]
+            + [{"class": item.get("failure_class", "other")} for item in skipped]
+        ),
     }
     save(out / "leaderboard.json", data)
 
@@ -270,6 +279,20 @@ def leaderboard(grades, out, skipped=(), k=4):
                     else "-"
                 )
                 lines.append(f"| {row['system']} | {incident} | {r1} | {r1_success} | {r2} |")
+    lines.extend(
+        [
+            "",
+            "## Execution failure classes (including recovered retries)",
+            "",
+            "| System | Set | Model(s) | Class | Count |",
+            "| --- | --- | --- | --- | ---: |",
+        ]
+    )
+    for row in rows:
+        for name, count in row["failure_counts"].items():
+            lines.append(
+                f"| {row['system']} | {row['suite_kind']} | {', '.join(sorted(set(row['models'].values())))} | {name} | {count} |"
+            )
     if skipped:
         lines.extend(["", "## Skipped attempts", ""])
         lines.extend(
@@ -281,12 +304,7 @@ def leaderboard(grades, out, skipped=(), k=4):
 
 
 async def key_usage(client):
-    response = await client.get(
-        "https://openrouter.ai/api/v1/key",
-        headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"].strip()},
-    )
-    response.raise_for_status()
-    return response.json()["data"]["usage"]
+    return (await key_info(client))["usage"]
 
 
 async def run_suite(args, *, demo_fn=None, model_factory=None):
@@ -323,6 +341,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     if max_input_tokens < 1:
         raise ValueError("max input tokens must be positive")
     out = args.out
+    disk_check(out)
     out.mkdir(parents=True, exist_ok=False)
     batch = {
         "version": "suite.v2",
@@ -391,19 +410,42 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
     save(out / "batch.json", batch)
     grades = []
     guard = None
+    key_errors = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         catalog = {}
         if model_factory is None:
-            initial = await key_usage(client)
-            save(out / "spend-before.json", {"usage": initial})
-            guard = SpendGuard(initial, args.budget_usd)
             response = await client.get("https://openrouter.ai/api/v1/models")
             response.raise_for_status()
             catalog = {m["id"]: m for m in response.json()["data"]}
+            preflight = await suite_preflight(
+                client,
+                args.models.split(","),
+                catalog,
+                args.budget_usd,
+                out,
+                paid=any(not m.endswith(":free") for m in args.models.split(",")),
+            )
+            print("Preflight: " + preflight["message"], flush=True)
+            save(out / "preflight.json", preflight)
+            initial = preflight["usage"]
+            save(out / "spend-before.json", {"usage": initial})
+            guard = SpendGuard(initial, args.budget_usd)
             save(out / "prices.json", {m: catalog[m] for m in args.models.split(",")})
+
+        async def observe_key(stage):
+            try:
+                guard.observe(await key_usage(client))
+                return True
+            except (httpx.HTTPError, ValueError) as exc:
+                message = f"Key usage check unavailable during {stage}: {type(exc).__name__}"
+                key_errors.append({"stage": stage, "message": message})
+                save(out / "key-usage-errors.json", key_errors)
+                print(message + "; retaining request accounting", flush=True)
+                return False
+
         try:
             if guard:
-                guard.observe(await key_usage(client))
+                await observe_key("launch")
             candidates = [
                 (model_id, repeat, fault, system)
                 for model_id in args.models.split(",")
@@ -417,7 +459,11 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     try:
                         # Only preflight the output floor here. The actual prompt is
                         # bounded and reserved atomically immediately before each call.
-                        bound = price_bound(catalog[model_id], max_input_tokens=0)
+                        bound = price_bound(
+                            catalog[model_id],
+                            max_input_tokens=0,
+                            output_tokens=output_limit(catalog[model_id]),
+                        )
                         reason = (
                             None
                             if guard.launch_allowed(bound) and bound <= amount(run_budget)
@@ -437,6 +483,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                                 "system": system,
                                 "repeat": repeat,
                                 "reason": reason,
+                                "failure_class": "budget_censored"
+                                if "budget" in reason
+                                else "other",
                             }
                         )
                         continue
@@ -449,6 +498,7 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 )
                 save(out / "budget-stop.json", {**batch["skipped"][0], **guard.snapshot()})
             semaphore = asyncio.Semaphore(concurrency)
+            cooldown = ProviderCooldown()
 
             async def run_job(model_id, repeat, fault, system):
                 async with semaphore:
@@ -456,7 +506,10 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     if model_factory:
                         adapter = model_factory(model_id)
                     else:
-                        adapter = OpenRouterModel(timeout_seconds=limits.call_seconds)
+                        adapter = OpenRouterModel(
+                            timeout_seconds=limits.call_seconds, cooldown=cooldown
+                        )
+                        adapter._catalog = catalog
                         adapter._models = dict.fromkeys(adapter._models, model_id)
                         adapter = BoundedModel(
                             adapter, catalog, run_guard, max_input_tokens=max_input_tokens
@@ -496,6 +549,16 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             directory / "attempt-error.json",
                             {
                                 "exception_type": type(exc).__name__,
+                                "class": getattr(
+                                    exc,
+                                    "failure_class",
+                                    "timeout" if isinstance(exc, TimeoutError) else "other",
+                                ),
+                                "message": (
+                                    str(exc) or f"{type(exc).__name__} during {system} attempt"
+                                ).replace(
+                                    os.environ.get("OPENROUTER_API_KEY") or "\0", "[redacted]"
+                                )[:1000],
                                 "launch_id": os.environ.get("II_LAUNCH_ID"),
                                 "model": model_id,
                                 "fault": fault,
@@ -508,6 +571,9 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                             {"state": run_guard.snapshot(), "calls": run_guard.records},
                         )
                     g = grade_run(directory, expectation(fault))
+                    result_path = directory / "result.json"
+                    retained = json.loads(result_path.read_text()) if result_path.exists() else {}
+                    g["failures"] = retained.get("failures", [])
                     g["graph"] = batch["graph"]
                     g["system"] = system
                     g["suite_kind"] = "reliability" if fault in VARIANTS else "primary"
@@ -532,11 +598,20 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                     }
                     if (directory / "attempt-error.json").exists():
                         error = json.loads((directory / "attempt-error.json").read_text())
+                        g["failures"].append(
+                            {
+                                "class": error.get("class", "other"),
+                                "message": error["message"],
+                                "kind": "attempt",
+                                "role": "runtime",
+                            }
+                        )
                         g["process"]["execution_status"] = (
                             "interrupted"
                             if error["exception_type"] == "CancelledError"
                             else "failed"
                         )
+                    g["failure_counts"] = failure_counts(g["failures"])
                     save(directory / "grade.json", g)
                     print(f"{g['verdict']} | {directory / 'report.md'}", flush=True)
                     return g
@@ -570,12 +645,18 @@ async def run_suite(args, *, demo_fn=None, model_factory=None):
                 leaderboard(grades, out, batch["skipped"], getattr(args, "k", 4))
                 raise
             if guard:
-                guard.observe(await key_usage(client))
+                await observe_key("settlement")
                 save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})
         finally:
             if guard:
-                guard.observe(await key_usage(client))
-                save(out / "spend-after.json", {"usage_delta": str(guard.key_delta)})
+                observed = await observe_key("finalization")
+                save(
+                    out / "spend-after.json",
+                    {
+                        "usage_delta": str(guard.key_delta) if observed else None,
+                        "last_observed_usage_delta": str(guard.key_delta),
+                    },
+                )
                 save(out / "budget.json", {"state": guard.snapshot(), "calls": guard.records})
     return leaderboard(grades, out, batch["skipped"], getattr(args, "k", 4))
 

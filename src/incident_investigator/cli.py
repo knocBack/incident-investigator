@@ -273,6 +273,11 @@ def main() -> None:
         except asyncio.CancelledError:
             print("Cancelled; retained results finalized", flush=True)
             raise SystemExit(143) from None
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            parser.exit(
+                2,
+                f"incident-investigator: {type(exc).__name__}: {exc or 'provider request failed'}\n",
+            )
         return
     if args.command == "inspect":
         result = json.loads((args.run_dir / "result.json").read_text())
